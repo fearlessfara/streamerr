@@ -153,6 +153,11 @@
   background: rgba(255, 255, 255, 0.08);
 }
 
+.header-search-wrap {
+  position: relative;
+  z-index: 60;
+}
+
 .header-search {
   display: inline-flex;
   align-items: center;
@@ -165,9 +170,107 @@
 }
 
 .header-search.is-open {
-  width: min(280px, 42vw);
+  width: min(320px, 48vw);
   border-color: #fff;
   background: rgba(0, 0, 0, 0.75);
+}
+
+.header-search-panel {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  right: 0;
+  width: min(360px, 92vw);
+  max-height: min(70vh, 420px);
+  overflow: auto;
+  background: rgba(20, 20, 20, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65);
+}
+
+.header-search-panel-status {
+  padding: 0.85rem 1rem;
+  color: var(--se-text-muted);
+  font-size: 0.9rem;
+}
+
+.header-search-panel-status.is-error {
+  color: var(--se-danger);
+}
+
+.header-search-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem 0;
+}
+
+.header-search-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  padding: 0.5rem 0.85rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+.header-search-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.header-search-poster {
+  width: 36px;
+  height: 54px;
+  object-fit: cover;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  flex: 0 0 auto;
+}
+
+.header-search-poster.is-empty {
+  display: block;
+}
+
+.header-search-item-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.header-search-item-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header-search-item-sub {
+  font-size: 0.8rem;
+  color: var(--se-text-muted);
+  text-transform: capitalize;
+}
+
+.header-search-more {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  color: #fff;
+  text-align: left;
+  padding: 0.75rem 0.85rem;
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.header-search-more:hover {
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .header-search-toggle {

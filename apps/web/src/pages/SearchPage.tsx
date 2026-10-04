@@ -51,7 +51,7 @@ export function SearchPage({ username }: { username: string }) {
               id="search"
               items={query.data.items}
               emptyText="No matches."
-              autoFocusFirst
+              autoFocusFirst={false}
             />
           </div>
         ) : null}
