@@ -1,0 +1,28 @@
+{
+  "name": "streamerr",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Streamerr — Your media. One stream.",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev:api & npm run dev:web",
+    "dev:api": "npm run dev -w @streamerr/api",
+    "dev:web": "npm run dev -w @streamerr/web",
+    "build": "npm run build -w @streamerr/shared && npm run build -w @streamerr/providers && npm run build -w @streamerr/ui && npm run build -w @streamerr/api && npm run build -w @streamerr/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT",
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "esbuild@0.25.12": true
+  }
+}

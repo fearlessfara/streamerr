@@ -1,0 +1,21 @@
+services:
+  streamerr:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: streamerr
+    ports:
+      - "${STREAMERR_PORT:-8787}:8787"
+    env_file:
+      - ../.env
+    environment:
+      STREAMERR_DATA_DIR: /data
+      STREAMERR_PUBLIC_URL: ${STREAMERR_PUBLIC_URL:-http://localhost:8787}
+    volumes:
+      - streamerr-data:/data
+      # Mount the same library path into Jellyfin so "Add to Library" is discoverable:
+      #   /data/library/movies and /data/library/series
+    restart: unless-stopped
+
+volumes:
+  streamerr-data:
