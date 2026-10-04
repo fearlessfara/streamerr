@@ -1,8 +1,15 @@
+# Local checkout:
+#   docker compose -f docker/docker-compose.yml up -d --build
+#
+# Build image from GitHub (no app checkout required; keep a local .env):
+#   docker compose -f docker/docker-compose.git.yml up -d --build
+
 services:
   streamerr:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
+    image: streamerr:local
     container_name: streamerr
     ports:
       - "${STREAMERR_PORT:-8787}:8787"

@@ -1,9 +1,6 @@
-# Compatibility shim — same image as the repository-root Dockerfile.
-# Prefer building from the repo root / Git URL:
+# Build from repository root (required for `docker build <git-url>`).
 #   docker build -t streamerr https://github.com/fearlessfara/streamerr.git
-#
-# This file exists so older `-f docker/Dockerfile` invocations keep working
-# when the build context is the repository root.
+#   docker compose -f docker/docker-compose.yml up -d --build
 
 FROM node:24-alpine AS build
 WORKDIR /app
@@ -22,6 +19,7 @@ RUN npm run build -w @streamerr/web
 FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# ffmpeg: IPTV VOD / cache remux (video copy + AAC) for browser playback
 RUN apk add --no-cache ffmpeg
 COPY package.json package-lock.json* ./
 COPY --from=build /app/node_modules ./node_modules

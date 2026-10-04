@@ -57,9 +57,25 @@ npm run dev
 
 ## Docker
 
+From a local checkout:
+
 ```bash
 cp .env.example .env
-docker compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml up -d --build
+```
+
+Build the image straight from GitHub (Dockerfile at repo root):
+
+```bash
+docker build -t streamerr https://github.com/fearlessfara/streamerr.git
+docker run --env-file .env -p 8787:8787 streamerr
+```
+
+Or compose with a Git build context (still needs a local `.env` for secrets):
+
+```bash
+cp .env.example .env
+docker compose -f docker/docker-compose.git.yml up -d --build
 ```
 
 Compose runs **Streamerr only**. Point env vars at your existing Jellyfin / Seerr / Dispatcharr instances. The Docker image includes **ffmpeg** for IPTV VOD/cache AAC remux.
