@@ -4,6 +4,10 @@ import path from "node:path";
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // SPA + hls.js/mpegts.js is intentionally one main chunk.
+    chunkSizeWarningLimit: 1600,
+  },
   resolve: {
     alias: [
       {

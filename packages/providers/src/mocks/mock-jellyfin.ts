@@ -151,10 +151,13 @@ export class MockJellyfinProvider implements LibraryProvider, PlaybackProvider {
   async resolvePlayback(
     _ctx: UserContext,
     identity: MediaIdentity,
+    opts?: { startPositionSeconds?: number; audioStreamIndex?: number },
   ): Promise<PlaybackSource | null> {
     if (!identity.jellyfinItemId) return null;
     const media = library.find((m) => m.identity.jellyfinItemId === identity.jellyfinItemId);
     if (!media) return null;
+    const saved =
+      media.availability.find((a) => a.provider === "jellyfin")?.positionSeconds ?? 0;
     return {
       provider: "jellyfin",
       delivery: {
@@ -170,7 +173,9 @@ export class MockJellyfinProvider implements LibraryProvider, PlaybackProvider {
       mediaSourceId: "mock",
       playSessionId: "mock-session",
       startPositionSeconds:
-        media.availability.find((a) => a.provider === "jellyfin")?.positionSeconds ?? 0,
+        opts?.startPositionSeconds != null && opts.startPositionSeconds > 0
+          ? opts.startPositionSeconds
+          : saved,
     };
   }
 

@@ -971,11 +971,13 @@ export class DispatcharrProvider implements VodProvider, LiveTvProvider, Acquisi
     };
   }
 
-  /** Open upstream Dispatcharr live MPEG-TS proxy with Streamerr-held auth. */
-  async openLiveStream(input: {
+  /**
+   * Authenticated live TS URL + headers for nginx X-Accel-Redirect.
+   * Token stays server-side in the accel path.
+   */
+  async resolveLiveStreamTarget(input: {
     uuid: string;
-    signal?: AbortSignal;
-  }): Promise<Response> {
+  }): Promise<{ url: string; headers: Record<string, string> }> {
     await this.ensureJwt();
     if (!this.auth) {
       throw new ProviderError("Dispatcharr auth not configured", {
@@ -988,25 +990,32 @@ export class DispatcharrProvider implements VodProvider, LiveTvProvider, Acquisi
     const url = new URL(this.baseUrl + path);
     if (this.accessToken) url.searchParams.set("token", this.accessToken);
 
-    const headers: Record<string, string> = {
-      ...this.gateHeaders(),
-      ...authHeaders(this.auth, this.accessToken),
+    return {
+      url: url.toString(),
+      headers: {
+        ...this.gateHeaders(),
+        ...authHeaders(this.auth, this.accessToken),
+      },
     };
+  }
 
-    const res = await (this.fetchImpl ?? fetch)(url, {
-      headers,
+  /** Open upstream Dispatcharr live MPEG-TS proxy with Streamerr-held auth. */
+  async openLiveStream(input: {
+    uuid: string;
+    signal?: AbortSignal;
+  }): Promise<Response> {
+    const target = await this.resolveLiveStreamTarget({ uuid: input.uuid });
+    const res = await (this.fetchImpl ?? fetch)(target.url, {
+      headers: target.headers,
       signal: input.signal,
       redirect: "follow",
     });
 
-    if ((res.status === 401 || res.status === 302) && this.auth.type === "credentials") {
+    if ((res.status === 401 || res.status === 302) && this.auth?.type === "credentials") {
       await this.ensureJwt(true);
-      if (this.accessToken) url.searchParams.set("token", this.accessToken);
-      return (this.fetchImpl ?? fetch)(url, {
-        headers: {
-          ...this.gateHeaders(),
-          ...authHeaders(this.auth, this.accessToken),
-        },
+      const retried = await this.resolveLiveStreamTarget({ uuid: input.uuid });
+      return (this.fetchImpl ?? fetch)(retried.url, {
+        headers: retried.headers,
         signal: input.signal,
         redirect: "follow",
       });

@@ -109,6 +109,7 @@ export function createAppContext(config: AppConfig): AppContext {
     ttlMs: config.STREAMERR_CACHE_TTL_MS,
     // Protect recently played cache files for long watches (default was 5 minutes).
     protectMs: 3 * 60 * 60_000,
+    dataDir: config.STREAMERR_DATA_DIR,
   });
   const iptvConnections = new IptvConnectionManager(config.STREAMERR_IPTV_MAX_CONNECTIONS);
   const acquisitions = new AcquisitionManager(

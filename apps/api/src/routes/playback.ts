@@ -1,38 +1,117 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { createReadStream, existsSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
-import { MediaIdentitySchema, toWebVtt } from "@streamerr/shared";
+import { MediaIdentitySchema, SubtitleTrackSchema, toWebVtt } from "@streamerr/shared";
 import { DispatcharrProvider, JellyfinProvider } from "@streamerr/providers";
 import type { AppContext } from "../context.js";
 import { requireAuth } from "../plugins/auth.js";
 import { IptvProgressStore } from "../services/iptv-progress.js";
+import { hlsDir, hlsPlaybackReady } from "../services/hls-paths.js";
 import {
-  remuxToBrowserMp4,
-  remuxToBrowserMp4FromFile,
-  remuxToBrowserMp4FromUrl,
-  webStreamToNode,
-} from "../services/ffmpeg-remux.js";
+  hlsAccelPath,
+  mediaPlaneIsNginx,
+  sendAccelRedirect,
+  upstreamAccelPath,
+} from "../services/media-plane.js";
 
 export async function registerPlaybackRoutes(
   app: FastifyInstance,
   ctx: AppContext,
 ): Promise<void> {
   const iptvProgress = new IptvProgressStore(ctx.db);
+  const nginxPlane = mediaPlaneIsNginx(ctx.config);
 
   app.post("/api/playback/resolve", async (req) => {
     const { userContext } = await requireAuth(req);
     const body = z
       .object({
         identity: MediaIdentitySchema,
+        startPositionSeconds: z.number().nonnegative().optional(),
+        audioStreamIndex: z.number().int().optional(),
+        /** Client-measured throughput cap (bits/s) from /api/playback/bandwidth-probe. */
+        maxStreamingBitrate: z.number().int().positive().max(50_000_000).optional(),
       })
       .parse(req.body);
 
-    const result = await ctx.playbackResolver.resolve(userContext, body.identity);
+    const result = await ctx.playbackResolver.resolve(userContext, body.identity, {
+      startPositionSeconds: body.startPositionSeconds,
+      audioStreamIndex: body.audioStreamIndex,
+      maxStreamingBitrate: body.maxStreamingBitrate,
+    });
     if (!result) {
       const err = new Error("No playable source") as Error & { statusCode: number };
       err.statusCode = 404;
       throw err;
     }
     return result;
+  });
+
+  /**
+   * Timed Range download through the same nginx→Jellyfin hop as HLS segments.
+   * The browser measures wall time; Streamerr only authorizes + X-Accel-Redirects.
+   */
+  app.get("/api/playback/bandwidth-probe", async (req, reply) => {
+    const { userContext } = await requireAuth(req);
+    if (ctx.useMocks || !(ctx.jellyfin instanceof JellyfinProvider)) {
+      return reply.status(404).send({ error: "Bandwidth probe requires Jellyfin" });
+    }
+    const query = z
+      .object({ itemId: z.string().min(1).optional() })
+      .parse(req.query);
+    const target = await ctx.jellyfin.resolveBandwidthProbeTarget(
+      userContext,
+      query.itemId,
+    );
+    if (nginxPlane) {
+      return sendAccelRedirect(reply, upstreamAccelPath("jellyfin", target.url.toString()), {
+        buffering: true,
+        contentType: "application/octet-stream",
+      });
+    }
+    const abort = new AbortController();
+    reply.raw.on("close", () => abort.abort());
+    const rangeHeader =
+      typeof req.headers.range === "string"
+        ? req.headers.range
+        : target.headers.Range;
+    const res = await fetch(target.url, {
+      headers: {
+        ...target.headers,
+        ...(rangeHeader ? { Range: rangeHeader } : {}),
+      },
+      signal: abort.signal,
+      redirect: "manual",
+    });
+    if (!res.ok && res.status !== 206) {
+      return reply.status(res.status).send({ error: "Probe upstream failed" });
+    }
+    reply.status(res.status);
+    reply.header("Content-Type", "application/octet-stream");
+    reply.header("Cache-Control", "no-store");
+    if (!res.body) {
+      return reply.send(Buffer.from(await res.arrayBuffer()));
+    }
+    return reply.send(res.body);
+  });
+
+  /** Async subtitle enrichment — does not block Play resolve. */
+  app.post("/api/playback/subtitles", async (req) => {
+    const { userContext } = await requireAuth(req);
+    const body = z
+      .object({
+        identity: MediaIdentitySchema,
+        existing: z.array(SubtitleTrackSchema).optional(),
+        provider: z.enum(["jellyfin", "cache", "dispatcharr"]).optional(),
+      })
+      .parse(req.body);
+
+    const subtitles = await ctx.playbackResolver.listSubtitles(
+      userContext,
+      body.identity,
+      { existing: body.existing, provider: body.provider },
+    );
+    return { subtitles };
   });
 
   app.post("/api/playback/progress", async (req) => {
@@ -108,6 +187,25 @@ export async function registerPlaybackRoutes(
       }
     }
 
+    const target = ctx.jellyfin.resolveStreamTarget(userContext, params.itemId, {
+      mediaSourceId: query.mediaSourceId,
+      playMethod: query.playMethod,
+      playSessionId: query.playSessionId,
+      audioStreamIndex: query.audioStreamIndex,
+      transcodingPath: query.transcodingPath,
+    });
+
+    // HLS master playlist stays in the API (rewrite segment URLs); media bytes go via nginx.
+    const looksLikePlaylist =
+      query.playMethod === "Transcode" ||
+      (query.transcodingPath?.includes(".m3u8") ?? false);
+
+    if (nginxPlane && !looksLikePlaylist) {
+      return sendAccelRedirect(reply, upstreamAccelPath("jellyfin", target.url.toString()), {
+        buffering: false,
+      });
+    }
+
     const abort = new AbortController();
     reply.raw.on("close", () => abort.abort());
     const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : undefined;
@@ -137,6 +235,13 @@ export async function registerPlaybackRoutes(
       return reply.send(rewritten);
     }
 
+    if (nginxPlane) {
+      return sendAccelRedirect(reply, upstreamAccelPath("jellyfin", target.url.toString()), {
+        buffering: false,
+        contentType: ct || undefined,
+      });
+    }
+
     reply.status(upstream.status);
     if (ct) reply.header("Content-Type", ct);
     const cl = upstream.headers.get("content-length");
@@ -152,58 +257,79 @@ export async function registerPlaybackRoutes(
     return reply.send(upstream.body);
   });
 
-  /** Serve a local acquisition file (cache / library download). */
+  /**
+   * Serve HLS playlist/segments for a local acquisition cache.
+   * nginx media plane: X-Accel-Redirect to /_hls/{id}/...
+   * node media plane: stream files from disk.
+   */
+  const sendCacheHls = async (
+    reply: FastifyReply,
+    id: string,
+    relative: string,
+  ) => {
+    const clean = relative
+      .replace(/\.\./g, "")
+      .replace(/^\/+/, "")
+      .replace(/\/+/g, "/");
+    if (!clean) {
+      return reply.status(400).send({ error: "Invalid path" });
+    }
+
+    const job = ctx.acquisitions.get(id);
+    if (!job) return reply.status(404).send({ error: "Cache not found" });
+    ctx.cacheManager.touch(id);
+
+    const filePath = join(hlsDir(ctx.config.STREAMERR_DATA_DIR, id), clean);
+    if (!existsSync(filePath)) {
+      if (!hlsPlaybackReady(ctx.config.STREAMERR_DATA_DIR, id)) {
+        return reply.status(404).send({ error: "HLS not ready" });
+      }
+      return reply.status(404).send({ error: "Segment not found" });
+    }
+
+    if (nginxPlane) {
+      return sendAccelRedirect(reply, hlsAccelPath(id, clean), {
+        contentType: contentTypeForHls(clean),
+      });
+    }
+
+    const st = statSync(filePath);
+    reply.header("Content-Type", contentTypeForHls(clean));
+    reply.header("Content-Length", String(st.size));
+    reply.header("Cache-Control", clean.endsWith(".m3u8") ? "no-cache" : "private, max-age=3600");
+    return reply.send(createReadStream(filePath));
+  };
+
+  app.get("/api/playback/cache/:id/hls/index.m3u8", async (req, reply) => {
+    await requireAuth(req);
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    return sendCacheHls(reply, id, "index.m3u8");
+  });
+
+  app.get("/api/playback/cache/:id/hls/:segment", async (req, reply) => {
+    await requireAuth(req);
+    const params = z
+      .object({
+        id: z.string().uuid(),
+        segment: z.string().min(1).regex(/^[\w.-]+$/),
+      })
+      .parse(req.params);
+    return sendCacheHls(reply, params.id, params.segment);
+  });
+
+  /** Legacy cache URL → HLS playlist (bookmarks / old clients). */
   app.get("/api/playback/cache/:id", async (req, reply) => {
     await requireAuth(req);
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    const query = z
-      .object({
-        /** Skip AAC remux (debug only) — raw MKV often has silent AC3 in Chrome. */
-        raw: z
-          .enum(["0", "1", "true", "false"])
-          .optional()
-          .transform((v) => v === "1" || v === "true"),
-        /** Remux seek offset in seconds (scrubbing for fMP4 remux). */
-        start: z.coerce.number().nonnegative().optional(),
-      })
-      .parse(req.query);
-    const meta = ctx.acquisitions.openLocalFileMeta(id);
-    if (!meta) {
-      return reply.status(404).send({ error: "Cache file not ready" });
+    if (!hlsPlaybackReady(ctx.config.STREAMERR_DATA_DIR, id)) {
+      return reply.status(404).send({ error: "Cache HLS not ready" });
     }
-    ctx.cacheManager.touch(id);
-
-    if (query.raw) {
-      const file = ctx.acquisitions.openLocalFile(id);
-      if (!file) return reply.status(404).send({ error: "Cache file not ready" });
-      reply.header("Content-Type", "video/x-matroska");
-      reply.header("Content-Length", String(file.size));
-      // Do not advertise Accept-Ranges unless we honor Range (players break otherwise).
-      reply.header("Cache-Control", "no-store");
-      return reply.send(file.stream);
-    }
-
-    // Remux from path so `-ss` can seek for scrubbing.
-    const { stream, proc } = remuxToBrowserMp4FromFile(meta.path, {
-      startSeconds: query.start,
-    });
-    reply.raw.on("close", () => {
-      try {
-        if (!proc.killed) proc.kill("SIGKILL");
-      } catch {
-        /* ignore */
-      }
-    });
-    reply.header("Content-Type", "video/mp4");
-    reply.header("Cache-Control", "no-store");
-    reply.header("X-Streamerr-Remux", "aac-mp4");
-    if (query.start) reply.header("X-Streamerr-Start", String(query.start));
-    return reply.send(stream);
+    return reply.redirect(`/api/playback/cache/${id}/hls/index.m3u8`);
   });
 
   /**
    * Proxies Dispatcharr live MPEG-TS using Streamerr-held auth.
-   * Streamed with minimal buffering so mpegts.js can absorb jitter client-side.
+   * nginx media plane: X-Accel-Redirect; node plane: pipe the body.
    */
   app.get("/api/playback/dispatcharr/live/:uuid", async (req, reply) => {
     await requireAuth(req);
@@ -214,11 +340,22 @@ export async function registerPlaybackRoutes(
       return reply.send("Mock live stream — configure DISPATCHARR auth for real playback.");
     }
 
-    const lease = ctx.iptvConnections.acquire("live", { label: `live:${params.uuid}` });
-    const cleanup = () => lease.release();
-    reply.raw.on("close", cleanup);
-
     try {
+      if (nginxPlane) {
+        // API returns 204 immediately; nginx keeps Dispatcharr open. Hold the live
+        // slot until another channel is tuned (see holdLive).
+        ctx.iptvConnections.holdLive(params.uuid);
+        const target = await ctx.dispatcharr.resolveLiveStreamTarget({ uuid: params.uuid });
+        return sendAccelRedirect(reply, upstreamAccelPath("dispatcharr", target.url), {
+          contentType: "video/mp2t",
+          buffering: false,
+        });
+      }
+
+      const lease = ctx.iptvConnections.acquire("live", { label: `live:${params.uuid}` });
+      const cleanup = () => lease.release();
+      reply.raw.on("close", cleanup);
+
       const upstream = await ctx.dispatcharr.openLiveStream({
         uuid: params.uuid,
         signal: lease.signal,
@@ -239,7 +376,6 @@ export async function registerPlaybackRoutes(
         cleanup();
         return reply.send(Buffer.from(await upstream.arrayBuffer()));
       }
-      // Abort the body when the lease is preempted (channel zap / connection cap).
       lease.signal.addEventListener(
         "abort",
         () => {
@@ -253,17 +389,12 @@ export async function registerPlaybackRoutes(
       );
       return reply.send(upstream.body);
     } catch (err) {
-      cleanup();
       throw err;
     }
   });
 
   /**
-   * Proxies Dispatcharr VOD using Streamerr-held auth.
-   * Browser never sees Dispatcharr credentials or raw IPTV URLs.
-   *
-   * Default: remux to fragmented MP4 with AAC audio. Upstream IPTV VOD is often
-   * Matroska + AC3/DTS — Chrome plays video and silently drops that audio.
+   * Debug / raw Dispatcharr VOD proxy (no remux). Normal Play uses auto-cache + HLS.
    */
   app.get("/api/playback/dispatcharr/vod/:uuid", async (req, reply) => {
     await requireAuth(req);
@@ -272,13 +403,10 @@ export async function registerPlaybackRoutes(
       .object({
         kind: z.enum(["movie", "episode"]).default("movie"),
         streamId: z.string().optional(),
-        /** Skip AAC remux (debug only). */
         raw: z
           .enum(["0", "1", "true", "false"])
           .optional()
           .transform((v) => v === "1" || v === "true"),
-        /** Remux seek offset in seconds. */
-        start: z.coerce.number().nonnegative().optional(),
       })
       .parse(req.query);
 
@@ -287,44 +415,31 @@ export async function registerPlaybackRoutes(
       return reply.send("Mock Dispatcharr stream — configure DISPATCHARR auth for real playback.");
     }
 
-    const lease = ctx.iptvConnections.acquire("playback", {
-      label: `vod:${params.uuid}`,
-    });
-    let killRemux: (() => void) | undefined;
-    const cleanup = () => {
-      killRemux?.();
-      lease.release();
-    };
-    reply.raw.on("close", cleanup);
+    if (!query.raw) {
+      return reply.status(400).send({
+        error: "Direct IPTV VOD remux is retired — use Play (auto-cache HLS) or ?raw=1 for debug",
+      });
+    }
 
     try {
-      reply.header("Cache-Control", "no-store");
-
-      // Scrub seeks: ffmpeg input-seek against the authenticated upstream URL.
-      // Pipe+discard from t=0 is too slow and flakes with connection limits.
-      if (!query.raw && query.start != null && query.start > 0) {
+      if (nginxPlane) {
+        // Debug raw VOD via nginx: lease until preempted (API returns 204 immediately).
+        ctx.iptvConnections.acquire("playback", { label: `vod:${params.uuid}` });
         const target = await ctx.dispatcharr.resolveVodStreamTarget({
           uuid: params.uuid,
           kind: query.kind,
           streamId: query.streamId,
         });
-        const { stream, proc } = remuxToBrowserMp4FromUrl(target.url, target.headers, {
-          startSeconds: query.start,
-          signal: lease.signal,
+        return sendAccelRedirect(reply, upstreamAccelPath("dispatcharr", target.url), {
+          buffering: false,
         });
-        killRemux = () => {
-          try {
-            if (!proc.killed) proc.kill("SIGKILL");
-          } catch {
-            /* ignore */
-          }
-        };
-        reply.status(200);
-        reply.header("Content-Type", "video/mp4");
-        reply.header("X-Streamerr-Remux", "aac-mp4");
-        reply.header("X-Streamerr-Start", String(query.start));
-        return reply.send(stream);
       }
+
+      const lease = ctx.iptvConnections.acquire("playback", {
+        label: `vod:${params.uuid}`,
+      });
+      const cleanup = () => lease.release();
+      reply.raw.on("close", cleanup);
 
       const upstream = await ctx.dispatcharr.openVodStream({
         uuid: params.uuid,
@@ -341,44 +456,16 @@ export async function registerPlaybackRoutes(
         });
       }
 
-      if (query.raw) {
-        reply.status(upstream.status);
-        const ct = upstream.headers.get("content-type");
-        if (ct) reply.header("Content-Type", ct);
-        const cl = upstream.headers.get("content-length");
-        if (cl) reply.header("Content-Length", cl);
-        const acceptRanges = upstream.headers.get("accept-ranges");
-        if (acceptRanges) reply.header("Accept-Ranges", acceptRanges);
-        if (!upstream.body) {
-          cleanup();
-          return reply.send(Buffer.from(await upstream.arrayBuffer()));
-        }
-        return reply.send(upstream.body);
-      }
-
+      reply.status(upstream.status);
+      reply.header("Cache-Control", "no-store");
+      const ct = upstream.headers.get("content-type");
+      if (ct) reply.header("Content-Type", ct);
       if (!upstream.body) {
         cleanup();
-        return reply.status(502).send({ error: "Upstream VOD returned an empty body" });
+        return reply.send(Buffer.from(await upstream.arrayBuffer()));
       }
-
-      const { stream, proc } = remuxToBrowserMp4(webStreamToNode(upstream.body), {
-        startSeconds: query.start,
-        signal: lease.signal,
-      });
-      killRemux = () => {
-        try {
-          if (!proc.killed) proc.kill("SIGKILL");
-        } catch {
-          /* ignore */
-        }
-      };
-      reply.status(200);
-      reply.header("Content-Type", "video/mp4");
-      reply.header("X-Streamerr-Remux", "aac-mp4");
-      if (query.start) reply.header("X-Streamerr-Start", String(query.start));
-      return reply.send(stream);
+      return reply.send(upstream.body);
     } catch (err) {
-      cleanup();
       throw err;
     }
   });
@@ -442,10 +529,21 @@ export async function registerPlaybackRoutes(
       return reply.status(404).send({ error: "Not available in mock mode" });
     }
 
-    // Only allow relative Jellyfin media paths — block open proxies / SSRF.
     const path = query.path;
     if (path.includes("://") || path.includes("..")) {
       return reply.status(400).send({ error: "Invalid path" });
+    }
+
+    const target = ctx.jellyfin.resolveStreamTarget(userContext, "hls", {
+      mediaSourceId: "hls",
+      jellyfinPath: path.startsWith("/") ? path : `/${path}`,
+    });
+
+    const isPlaylist = path.includes(".m3u8");
+    if (nginxPlane && !isPlaylist) {
+      return sendAccelRedirect(reply, upstreamAccelPath("jellyfin", target.url.toString()), {
+        buffering: false,
+      });
     }
 
     const abort = new AbortController();
@@ -466,6 +564,13 @@ export async function registerPlaybackRoutes(
       reply.header("Content-Type", "application/vnd.apple.mpegurl");
       reply.header("Cache-Control", "no-cache");
       return reply.send(rewritten);
+    }
+
+    if (nginxPlane) {
+      return sendAccelRedirect(reply, upstreamAccelPath("jellyfin", target.url.toString()), {
+        buffering: false,
+        contentType: ct || undefined,
+      });
     }
 
     reply.status(upstream.status);
@@ -497,6 +602,12 @@ async function sendBazarrSubtitle(
   return reply.send(toWebVtt(file));
 }
 
+function contentTypeForHls(relative: string): string {
+  if (relative.endsWith(".m3u8")) return "application/vnd.apple.mpegurl";
+  if (relative.endsWith(".m4s") || relative.endsWith(".mp4")) return "video/mp4";
+  return "video/mp2t";
+}
+
 function rewriteHlsPlaylist(
   playlist: string,
   itemId: string,
@@ -520,7 +631,6 @@ function rewriteHlsPlaylist(
     .map((line) => {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#")) {
-        // Rewrite URI="..." attributes in tags
         if (trimmed.includes("URI=")) {
           return trimmed.replace(/URI="([^"]+)"/g, (_m, uri: string) => {
             return `URI="${toHlsProxyUrl(resolveJellyfinUri(uri, baseDir))}"`;

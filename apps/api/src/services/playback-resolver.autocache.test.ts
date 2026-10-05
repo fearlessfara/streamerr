@@ -60,6 +60,65 @@ describe("PlaybackResolver IPTV auto-cache", () => {
     expect(ensureCacheForPlay).toHaveBeenCalledOnce();
   });
 
+  it("returns ready without subtitle tracks; listSubtitles enriches later", async () => {
+    const acquisitions = {
+      cacheAvailabilityFor: () => ({
+        provider: "cache" as const,
+        available: true,
+        acquisitionId: "acq-fast",
+        bytesDownloaded: 5_000_000,
+        totalBytes: 10_000_000,
+        playbackAvailable: true,
+        complete: false,
+      }),
+      ensureCacheForPlay: vi.fn(),
+      get: () => ({
+        id: "acq-fast",
+        mode: "cache",
+        cacheExpiresAt: "2099-01-01T00:00:00.000Z",
+      }),
+    };
+
+    const jellyfin = {
+      findByTmdb: vi.fn(async () => null),
+      resolvePlayback: vi.fn(async () => null as PlaybackSource | null),
+    };
+
+    const bazarr = {
+      isConfigured: () => true,
+      listSubtitles: vi.fn(async () => [
+        {
+          index: 0,
+          language: "en",
+          label: "English",
+          url: "/api/playback/bazarr/subtitle/1",
+        },
+      ]),
+    };
+
+    const resolver = new PlaybackResolver(
+      jellyfin as never,
+      { resolveVodPlayback: true } as never,
+      undefined,
+      acquisitions as never,
+      undefined,
+      bazarr as never,
+    );
+
+    const result = await resolver.resolve({} as never, identity);
+    expect(result?.status).toBe("ready");
+    if (result?.status === "ready") {
+      expect(result.source.subtitles).toBeUndefined();
+    }
+
+    const tracks = await resolver.listSubtitles({} as never, identity, {
+      provider: "cache",
+    });
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0]?.url).toContain("bazarr");
+    expect(bazarr.listSubtitles).toHaveBeenCalledOnce();
+  });
+
   it("returns ready cache source when playbackAvailable", async () => {
     const cacheSourceBits = {
       acquisitionId: "acq-2",
@@ -99,7 +158,8 @@ describe("PlaybackResolver IPTV auto-cache", () => {
     expect(result?.status).toBe("ready");
     if (result?.status === "ready") {
       expect(result.source.provider).toBe("cache");
-      expect(result.source.delivery.url).toContain("/playback/cache/acq-2");
+      expect(result.source.delivery.url).toContain("/playback/cache/acq-2/hls/index.m3u8");
+      expect(result.source.hls).toBe(true);
       expect(result.source.downloadComplete).toBe(false);
     }
     expect(acquisitions.ensureCacheForPlay).not.toHaveBeenCalled();

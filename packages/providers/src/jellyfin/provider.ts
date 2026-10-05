@@ -6,6 +6,13 @@ import { JELLYFIN_CAPABILITIES } from "../types.js";
 import { extractTmdbId, hasPlayableMedia, itemMatchesTmdb, ticksToSeconds } from "./identity.js";
 import { mapJellyfinItemToMedia } from "./map-item.js";
 import {
+  BANDWIDTH_PROBE_BYTES,
+  DEFAULT_STREAMING_BITRATE,
+  bandwidthProbeRangeHeader,
+  bitrateFromProbe,
+  clampStreamingBitrate,
+} from "./bandwidth.js";
+import {
   JellyfinAuthResultSchema,
   JellyfinItemSchema,
   JellyfinItemsResponseSchema,
@@ -32,6 +39,8 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
   private readonly clientVersion: string;
   private readonly fetchImpl?: typeof fetch;
   private readonly streamerrPublicUrl?: string;
+  /** Cached upstream probe (Jellyfin hop nginx will use for X-Accel). */
+  private bitrateProbe: { bps: number; at: number } | null = null;
 
   constructor(opts: JellyfinProviderOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
@@ -310,9 +319,37 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
   async resolvePlayback(
     userContext: UserContext,
     identity: MediaIdentity,
+    opts?: {
+      startPositionSeconds?: number;
+      audioStreamIndex?: number;
+      /** Client-measured cap (bits/s); combined with a server probe of the Jellyfin hop. */
+      maxStreamingBitrate?: number;
+    },
   ): Promise<PlaybackSource | null> {
     const itemId = identity.jellyfinItemId;
     if (!itemId) return null;
+
+    const item = await this.getByJellyfinItemId(userContext, itemId);
+    const jellyfinAvail = item?.availability.find((a) => a.provider === "jellyfin");
+    const savedPosition = jellyfinAvail?.positionSeconds ?? 0;
+    const durationSeconds =
+      jellyfinAvail?.durationSeconds ?? item?.metadata?.durationSeconds;
+    // Explicit seek/resume wins; otherwise Continue Watching.
+    // Resume offset for the client (hls.js startPosition). Do NOT send
+    // StartTimeTicks to Jellyfin: it still returns a full VOD playlist from t=0,
+    // and combining StartTimeTicks + client seek makes scrub snap back to
+    // Continue Watching / playlist head.
+    const startPositionSeconds =
+      opts?.startPositionSeconds != null && opts.startPositionSeconds > 0
+        ? opts.startPositionSeconds
+        : savedPosition;
+
+    const probed = await this.probeUpstreamBitrate(userContext, itemId);
+    const maxStreamingBitrate = clampStreamingBitrate(
+      opts?.maxStreamingBitrate != null
+        ? Math.min(opts.maxStreamingBitrate, probed)
+        : probed,
+    );
 
     const { data } = await this.httpFor(userContext).request(
       "POST",
@@ -321,11 +358,14 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
         query: { userId: userContext.jellyfinUserId },
         body: {
           UserId: userContext.jellyfinUserId,
-          DeviceProfile: browserDeviceProfile(),
+          DeviceProfile: browserDeviceProfile(maxStreamingBitrate),
           EnableDirectPlay: true,
           EnableDirectStream: true,
           EnableTranscoding: true,
-          MaxStreamingBitrate: 120_000_000,
+          MaxStreamingBitrate: maxStreamingBitrate,
+          ...(opts?.audioStreamIndex != null
+            ? { AudioStreamIndex: opts.audioStreamIndex }
+            : {}),
         },
         schema: JellyfinPlaybackInfoSchema,
       },
@@ -346,21 +386,27 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
       playMethod,
     });
     if (playSessionId) params.set("playSessionId", playSessionId);
-    if (source.DefaultAudioStreamIndex != null) {
-      params.set("audioStreamIndex", String(source.DefaultAudioStreamIndex));
+    const audioIndex = opts?.audioStreamIndex ?? source.DefaultAudioStreamIndex;
+    if (audioIndex != null) {
+      params.set("audioStreamIndex", String(audioIndex));
     }
     if (source.TranscodingUrl) {
       const relative = normalizeJellyfinRelativePath(source.TranscodingUrl, this.baseUrl);
-      if (relative) params.set("transcodingPath", relative);
+      // Strip any StartTimeTicks Jellyfin echoed — full VOD playlist + client seek only.
+      if (relative) {
+        try {
+          const u = new URL(relative, "http://jellyfin.local");
+          u.searchParams.delete("StartTimeTicks");
+          params.set("transcodingPath", `${u.pathname}${u.search}`);
+        } catch {
+          params.set("transcodingPath", relative);
+        }
+      }
     }
 
     // Same-origin Streamerr proxy keeps Jellyfin tokens server-side (session cookie only).
     // Browser never sees Jellyfin credentials; DirectPlay/DirectStream/Transcode still run on Jellyfin.
     const proxyUrl = `/api/playback/jellyfin/stream/${encodeURIComponent(itemId)}?${params.toString()}`;
-
-    const item = await this.getByJellyfinItemId(userContext, itemId);
-    const startPositionSeconds =
-      item?.availability.find((a) => a.provider === "jellyfin")?.positionSeconds ?? 0;
 
     const audioTracks = (source.MediaStreams ?? [])
       .filter((s) => s.Type === "Audio")
@@ -399,6 +445,7 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
       mediaSourceId: source.Id,
       itemId,
       startPositionSeconds,
+      ...(durationSeconds != null && durationSeconds > 0 ? { durationSeconds } : {}),
       audioTracks,
       subtitles,
     };
@@ -462,8 +509,125 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
     });
   }
 
-  /** Proxy helper used by the API stream route. */
-  async openStream(
+  /**
+   * URL + headers for a Range-able Jellyfin download used by bandwidth probes.
+   * Prefer the title being played; otherwise the first library movie/episode.
+   */
+  async resolveBandwidthProbeTarget(
+    userContext: UserContext,
+    itemId?: string,
+  ): Promise<{ url: URL; headers: Record<string, string> }> {
+    let probeItemId = itemId;
+    if (!probeItemId) {
+      const { data } = await this.httpFor(userContext).request(
+        "GET",
+        `/Users/${encodeURIComponent(userContext.jellyfinUserId)}/Items`,
+        {
+          query: {
+            Recursive: true,
+            IncludeItemTypes: "Movie,Episode",
+            Limit: 1,
+            Fields: "Path",
+          },
+          schema: JellyfinItemsResponseSchema,
+        },
+      );
+      probeItemId = data.Items?.[0]?.Id;
+    }
+    if (!probeItemId) {
+      throw new ProviderError("No Jellyfin item available for bandwidth probe", {
+        code: "unavailable",
+        provider: "jellyfin",
+      });
+    }
+
+    // Use the same /Videos/.../stream media hop as HLS (api_key in query).
+    // /Items/.../Download is often blocked or auth-different behind Cloudflare.
+    const url = new URL(
+      `${this.baseUrl}/Videos/${encodeURIComponent(probeItemId)}/stream`,
+    );
+    url.searchParams.set("static", "true");
+    url.searchParams.set("api_key", userContext.jellyfinAccessToken);
+    const headers: Record<string, string> = {
+      Authorization: mediaBrowserAuth({
+        client: this.clientName,
+        device: userContext.deviceName,
+        deviceId: userContext.deviceId,
+        version: this.clientVersion,
+        token: userContext.jellyfinAccessToken,
+      }),
+      Range: bandwidthProbeRangeHeader(),
+    };
+    return { url, headers };
+  }
+
+  /**
+   * Time a ~1.5 MiB Range download from Jellyfin (same hop nginx uses for media).
+   * Cached briefly so scrubbing / subtitle resolves do not re-probe every time.
+   */
+  async probeUpstreamBitrate(
+    userContext: UserContext,
+    itemId?: string,
+  ): Promise<number> {
+    const now = Date.now();
+    if (this.bitrateProbe && now - this.bitrateProbe.at < 60_000) {
+      return this.bitrateProbe.bps;
+    }
+
+    try {
+      const { url, headers } = await this.resolveBandwidthProbeTarget(
+        userContext,
+        itemId,
+      );
+      const fetchImpl = this.fetchImpl ?? fetch;
+      const t0 = Date.now();
+      const res = await fetchImpl(url, {
+        headers,
+        redirect: "manual",
+        signal: AbortSignal.timeout(Math.min(this.timeoutMs, 10_000)),
+      });
+      if (!res.ok && res.status !== 206) {
+        throw new ProviderError(`Bandwidth probe failed: ${res.status}`, {
+          code: classifyOrUnknown(res.status),
+          provider: "jellyfin",
+          statusCode: res.status,
+        });
+      }
+      const reader = res.body?.getReader();
+      if (!reader) {
+        const buf = await res.arrayBuffer();
+        const bps = bitrateFromProbe(buf.byteLength, (Date.now() - t0) / 1000);
+        this.bitrateProbe = { bps, at: Date.now() };
+        return bps;
+      }
+      let got = 0;
+      while (got < BANDWIDTH_PROBE_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        got += value.byteLength;
+      }
+      try {
+        await reader.cancel();
+      } catch {
+        /* ignore */
+      }
+      const bps = bitrateFromProbe(got, (Date.now() - t0) / 1000);
+      this.bitrateProbe = { bps, at: Date.now() };
+      return bps;
+    } catch (err) {
+      console.warn(
+        "[jellyfin] bandwidth probe failed, using default",
+        err instanceof Error ? err.message : err,
+      );
+      return DEFAULT_STREAMING_BITRATE;
+    }
+  }
+
+  /**
+   * Build the Jellyfin media URL + auth headers without opening the body.
+   * Used by nginx X-Accel-Redirect (token stays server-side in the accel path).
+   */
+  resolveStreamTarget(
     userContext: UserContext,
     itemId: string,
     opts: {
@@ -472,13 +636,9 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
       playSessionId?: string;
       audioStreamIndex?: number;
       transcodingPath?: string;
-      /** Extra path/query from HLS segment requests */
       jellyfinPath?: string;
-      /** Forward Range for seeking */
-      range?: string;
-      signal?: AbortSignal;
     },
-  ): Promise<Response> {
+  ): { url: URL; headers: Record<string, string> } {
     let url: URL;
 
     if (opts.jellyfinPath) {
@@ -524,6 +684,27 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
         token: userContext.jellyfinAccessToken,
       }),
     };
+    return { url, headers };
+  }
+
+  /** Proxy helper used by the API stream route (node media plane). */
+  async openStream(
+    userContext: UserContext,
+    itemId: string,
+    opts: {
+      mediaSourceId: string;
+      playMethod?: "DirectPlay" | "DirectStream" | "Transcode";
+      playSessionId?: string;
+      audioStreamIndex?: number;
+      transcodingPath?: string;
+      /** Extra path/query from HLS segment requests */
+      jellyfinPath?: string;
+      /** Forward Range for seeking */
+      range?: string;
+      signal?: AbortSignal;
+    },
+  ): Promise<Response> {
+    const { url, headers } = this.resolveStreamTarget(userContext, itemId, opts);
     if (opts.range) headers.Range = opts.range;
 
     const res = await (this.fetchImpl ?? fetch)(url, {
@@ -766,14 +947,15 @@ function resolvePlayMethodForBrowser(source: {
  * Browser-safe profile. Do NOT advertise DTS/TrueHD/EAC3/AC3 as DirectPlay —
  * Chromium will play video and silently drop unsupported audio.
  */
-function browserDeviceProfile() {
+function browserDeviceProfile(maxStreamingBitrate: number) {
   // No AC3/DTS/TrueHD/FLAC in DirectPlay — Chrome plays video and drops them silently.
   const videoAudio = "aac,mp3,opus,vorbis";
   const videoCodecs = "h264,vp8,vp9,av1";
+  const maxBitrate = clampStreamingBitrate(maxStreamingBitrate);
   return {
     Name: "Streamerr Web",
-    MaxStreamingBitrate: 120_000_000,
-    MaxStaticBitrate: 120_000_000,
+    MaxStreamingBitrate: maxBitrate,
+    MaxStaticBitrate: maxBitrate,
     MusicStreamingTranscodingBitrate: 384_000,
     DirectPlayProfiles: [
       {
@@ -807,8 +989,11 @@ function browserDeviceProfile() {
         Protocol: "hls",
         Context: "Streaming",
         MaxAudioChannels: "2",
-        MinSegments: 1,
-        BreakOnNonKeyFrames: true,
+        // Wait for two segments so the first playhead second is already buffered.
+        MinSegments: 2,
+        // true makes playlist times drift from sample PTS and hls.js can
+        // loop-load the same two segments after a stall/seek.
+        BreakOnNonKeyFrames: false,
       },
       {
         Container: "mp4",

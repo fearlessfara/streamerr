@@ -5,7 +5,14 @@ import mpegts from "mpegts.js";
 import type { MediaIdentity, PlaybackSource, SubtitleTrack } from "@streamerr/shared";
 import { parseSubtitleCues, type SubtitleCue } from "@streamerr/shared";
 import { Button } from "@streamerr/ui";
-import { getAcquisition, playLiveChannel, reportIptvProgress, reportProgress } from "../lib/api";
+import {
+  getAcquisition,
+  listPlaybackSubtitles,
+  playLiveChannel,
+  reportIptvProgress,
+  reportProgress,
+  resolvePlayback,
+} from "../lib/api";
 import {
   resolveSubtitleIndex,
   saveSubtitleOff,
@@ -62,9 +69,15 @@ function finiteDuration(
   return catalogueDuration > 0 ? catalogueDuration : 0;
 }
 
+/** Legacy direct IPTV VOD remux (?raw / debug). Cache Play uses HLS. */
 function isRemuxVodUrl(url: string | undefined): boolean {
   if (!url) return false;
-  return url.includes("/playback/dispatcharr/vod/") || url.includes("/playback/cache/");
+  return url.includes("/playback/dispatcharr/vod/");
+}
+
+function isCacheHlsUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  return url.includes("/playback/cache/") && url.includes("/hls/");
 }
 
 function getLiveEdge(video: HTMLVideoElement): number {
@@ -247,8 +260,10 @@ function IconCc() {
   );
 }
 
-function textSubtitles(source: PlaybackSource | undefined): Array<SubtitleTrack & { url: string }> {
-  return (source?.subtitles ?? []).filter(
+function textSubtitles(
+  tracks: SubtitleTrack[] | undefined,
+): Array<SubtitleTrack & { url: string }> {
+  return (tracks ?? []).filter(
     (track): track is SubtitleTrack & { url: string } => Boolean(track.url),
   );
 }
@@ -266,7 +281,25 @@ export function PlayerPage() {
   const volumeBeforeMute = useRef(1);
   /** Absolute timeline offset when remux restarts at `?start=` (fMP4 has no duration). */
   const remuxBaseRef = useRef(0);
+  /** Absolute scrub target — ignore timeupdate until the media catches up. */
+  const pendingSeekRef = useRef<number | null>(null);
+  /**
+   * Continue Watching resume must apply once per delivery URL.
+   * Re-applying on every MANIFEST_PARSED / loadedmetadata snaps scrubbers
+   * back to the saved position (e.g. seek to 40:00 → yanked to ~7:00).
+   */
+  const resumeAppliedRef = useRef(false);
+  const progressStartedRef = useRef(false);
   const sourceGenRef = useRef(0);
+  /** Absolute playhead — survives delivery URL remounts (audio track switch). */
+  const currentSecondsRef = useRef(0);
+  /**
+   * One-shot resume override after mid-playback remounts (audio language change).
+   * Takes precedence over Continue Watching `startPositionSeconds`.
+   */
+  const keepPositionRef = useRef<number | null>(null);
+  /** Detach in-flight HLS scrub snap listener when a newer seek arrives. */
+  const hlsSeekSnapRef = useRef<(() => void) | null>(null);
   const source = state?.source;
   const isLive =
     Boolean(state?.live) ||
@@ -274,6 +307,7 @@ export function PlayerPage() {
     Boolean(source?.delivery.url.includes("/playback/dispatcharr/live/"));
   const knownDuration = source?.durationSeconds ?? 0;
   const remuxVod = !isLive && isRemuxVodUrl(source?.delivery.url);
+  const cacheHls = !isLive && (Boolean(source?.hls) || isCacheHlsUrl(source?.delivery.url));
 
   const [downloadBytes, setDownloadBytes] = useState(source?.bytesDownloaded ?? 0);
   const [downloadTotal, setDownloadTotal] = useState(source?.totalBytes);
@@ -300,6 +334,10 @@ export function PlayerPage() {
   const [audioIndex, setAudioIndex] = useState<number | null>(null);
   const [zapping, setZapping] = useState(false);
   const [cues, setCues] = useState<SubtitleCue[]>([]);
+  /** Tracks from resolve (if any) + async Bazarr/Jellyfin enrichment. */
+  const [subtitleTracksState, setSubtitleTracksState] = useState<SubtitleTrack[]>(
+    () => source?.subtitles ?? [],
+  );
   const subsOpenRef = useRef(false);
   const audioOpenRef = useRef(false);
   const subsMenuRef = useRef<HTMLDivElement>(null);
@@ -379,28 +417,86 @@ export function PlayerPage() {
   const selectAudioTrack = useCallback(
     (index: number) => {
       if (!source || source.provider !== "jellyfin") return;
-      try {
-        const u = new URL(source.delivery.url, window.location.origin);
-        u.searchParams.set("audioStreamIndex", String(index));
-        const nextUrl = `${u.pathname}${u.search}`;
-        setAudioIndex(index);
-        setAudioOpen(false);
-        navigate("/play", {
-          replace: true,
-          state: {
-            ...state,
-            source: {
-              ...source,
-              delivery: { ...source.delivery, url: nextUrl },
-            },
-          } satisfies PlayState,
-        });
-        revealControls();
-      } catch (err) {
-        console.warn("[player] audio switch failed", err);
+      const identity = state?.identity;
+      const v = videoRef.current;
+      const position = Math.max(
+        0,
+        Math.floor(
+          pendingSeekRef.current ??
+            (v && Number.isFinite(v.currentTime)
+              ? remuxBaseRef.current + v.currentTime
+              : currentSecondsRef.current),
+        ),
+      );
+
+      setAudioIndex(index);
+      setAudioOpen(false);
+      revealControls(true);
+      // Carry playhead across the inevitable stream remount.
+      keepPositionRef.current = position > 0 ? position : null;
+      pendingSeekRef.current = position > 0 ? position : null;
+      currentSecondsRef.current = position;
+      setCurrent(position);
+
+      if (!identity) {
+        try {
+          const u = new URL(source.delivery.url, window.location.origin);
+          u.searchParams.set("audioStreamIndex", String(index));
+          navigate("/play", {
+            replace: true,
+            state: {
+              ...state,
+              source: {
+                ...source,
+                delivery: { ...source.delivery, url: `${u.pathname}${u.search}` },
+                startPositionSeconds: position > 0 ? position : source.startPositionSeconds,
+              },
+            } satisfies PlayState,
+          });
+        } catch (err) {
+          console.warn("[player] audio switch failed", err);
+          keepPositionRef.current = null;
+        }
+        return;
       }
+
+      // Fresh PlaybackInfo so AudioStreamIndex is baked into the HLS session.
+      void resolvePlayback(identity, {
+        audioStreamIndex: index,
+        startPositionSeconds: position > 0 ? position : undefined,
+      })
+        .then((result) => {
+          if (result.status !== "ready") {
+            keepPositionRef.current = null;
+            pendingSeekRef.current = null;
+            return;
+          }
+          navigate("/play", {
+            replace: true,
+            state: {
+              ...state,
+              identity,
+              source: {
+                ...result.source,
+                startPositionSeconds:
+                  position > 0 ? position : result.source.startPositionSeconds,
+                durationSeconds: result.source.durationSeconds ?? source.durationSeconds,
+                // Keep already-loaded text tracks; enrichment can refresh later.
+                subtitles: subtitleTracksState.length
+                  ? subtitleTracksState
+                  : (source.subtitles ?? result.source.subtitles),
+                audioTracks: result.source.audioTracks ?? source.audioTracks,
+              },
+            } satisfies PlayState,
+          });
+        })
+        .catch((err) => {
+          console.warn("[player] audio switch failed", err);
+          keepPositionRef.current = null;
+          pendingSeekRef.current = null;
+        });
     },
-    [navigate, revealControls, source, state],
+    [navigate, revealControls, source, state, subtitleTracksState],
   );
 
   const measureLiveBehind = useCallback(() => {
@@ -458,14 +554,41 @@ export function PlayerPage() {
     return Math.max(30, knownDuration * 0.05);
   }, [downloadComplete, downloadBytes, downloadTotal, knownDuration]);
 
+  const isLiveRef = useRef(isLive);
+  const resumeSecondsRef = useRef(source?.startPositionSeconds);
+  isLiveRef.current = isLive;
+  resumeSecondsRef.current = source?.startPositionSeconds;
+
+  /** Apply Continue Watching offset at most once per delivery URL. */
+  const applyResumeOnce = useCallback((video: HTMLVideoElement): boolean => {
+    if (resumeAppliedRef.current || isLiveRef.current) return false;
+    const resume = resumeSecondsRef.current;
+    if (resume == null || resume <= 30) {
+      resumeAppliedRef.current = true;
+      return false;
+    }
+    try {
+      video.currentTime = resume;
+    } catch {
+      /* ignore */
+    }
+    resumeAppliedRef.current = true;
+    setCurrent(resume);
+    return true;
+  }, []);
+
   const onSeek = useCallback(
     (value: number) => {
       const v = videoRef.current;
       if (!v || !source) return;
       const url = source.delivery.url;
-      const isRemuxVod =
-        !isLive &&
-        (url.includes("/playback/dispatcharr/vod/") || url.includes("/playback/cache/"));
+      const isRemuxVod = !isLive && isRemuxVodUrl(url);
+      const isJellyfinHls =
+        source.provider === "jellyfin" &&
+        (source.hls ||
+          source.playMethod === "Transcode" ||
+          url.includes("m3u8") ||
+          source.mimeType?.includes("mpegurl"));
       const target = Math.max(0, value);
       const downloadCap = maxSeekableSeconds();
       const capped = Math.min(
@@ -473,18 +596,28 @@ export function PlayerPage() {
         Number.isFinite(downloadCap) ? downloadCap : target,
       );
 
+      // User took control — never re-apply Continue Watching resume.
+      resumeAppliedRef.current = true;
+      pendingSeekRef.current = capped;
+      setSeeking(true);
+      setCurrent(capped);
+
+      let seekableStart = 0;
+      let seekableEnd = 0;
+      try {
+        if (v.seekable.length > 0) {
+          seekableStart = v.seekable.start(0);
+          seekableEnd = v.seekable.end(v.seekable.length - 1);
+        }
+      } catch {
+        /* ignore */
+      }
+
       if (isRemuxVod) {
         const local = capped - remuxBaseRef.current;
-        let seekableEnd = 0;
-        try {
-          if (v.seekable.length > 0) seekableEnd = v.seekable.end(v.seekable.length - 1);
-        } catch {
-          /* ignore */
-        }
         // Small moves inside the already-buffered remux window — no restart.
         if (local >= 0 && local <= seekableEnd - 0.35 && seekableEnd > 1) {
           v.currentTime = local;
-          setCurrent(capped);
           revealControls();
           return;
         }
@@ -512,7 +645,6 @@ export function PlayerPage() {
             el.src = next;
             void el.play().catch(() => revealControls(true));
           }, 40);
-          setCurrent(capped);
           if (knownDuration > 0) setDuration(knownDuration);
           revealControls();
           return;
@@ -521,9 +653,117 @@ export function PlayerPage() {
         }
       }
 
+      // Jellyfin HLS: full VOD playlist from t=0. Seek in-session only —
+      // never re-resolve (that re-applies Continue Watching / StartTimeTicks).
+      if (isJellyfinHls) {
+        remuxBaseRef.current = 0;
+        currentSecondsRef.current = capped;
+        // User scrub wins over Continue Watching for stall recovery.
+        keepPositionRef.current = null;
+        const hls = hlsRef.current;
+        hlsSeekSnapRef.current?.();
+        hlsSeekSnapRef.current = null;
+
+        const targetInBuffered = (): boolean => {
+          try {
+            for (let i = 0; i < v.buffered.length; i++) {
+              if (capped >= v.buffered.start(i) && capped <= v.buffered.end(i) - 0.25) {
+                return true;
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+          return false;
+        };
+
+        const snapPlayhead = (): boolean => {
+          try {
+            // Only set currentTime when MSE will not clamp us back into the
+            // Continue Watching buffer (seekable often equals buffered until
+            // the target range is loaded).
+            if (targetInBuffered()) {
+              v.currentTime = capped;
+              return true;
+            }
+            const dur = v.duration;
+            if (Number.isFinite(dur) && dur >= capped + 0.5) {
+              let seekableCovers = false;
+              try {
+                if (v.seekable.length > 0) {
+                  seekableCovers =
+                    v.seekable.start(0) <= capped + 0.5 &&
+                    v.seekable.end(v.seekable.length - 1) >= capped - 0.5;
+                }
+              } catch {
+                /* ignore */
+              }
+              if (seekableCovers || targetInBuffered()) {
+                v.currentTime = capped;
+                return true;
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+          return false;
+        };
+
+        try {
+          if (!hls) {
+            v.currentTime = capped;
+          } else if (targetInBuffered()) {
+            v.currentTime = capped;
+          } else {
+            // Load the target range FIRST. Setting currentTime while seekable is
+            // still stuck around Continue Watching (~7:00) makes the browser
+            // clamp every scrub back to that minute.
+            hls.stopLoad();
+            hls.startLoad(capped);
+            if (!snapPlayhead()) {
+              const onFrag = () => {
+                if (pendingSeekRef.current != null && Math.abs(pendingSeekRef.current - capped) > 1) {
+                  return;
+                }
+                if (snapPlayhead()) {
+                  hls.off(Hls.Events.FRAG_BUFFERED, onFrag);
+                  hlsSeekSnapRef.current = null;
+                  void v.play().catch(() => revealControls(true));
+                }
+              };
+              hls.on(Hls.Events.FRAG_BUFFERED, onFrag);
+              const timer = window.setTimeout(() => {
+                hls.off(Hls.Events.FRAG_BUFFERED, onFrag);
+                hlsSeekSnapRef.current = null;
+                try {
+                  v.currentTime = capped;
+                } catch {
+                  /* ignore */
+                }
+                void v.play().catch(() => revealControls(true));
+              }, 20_000);
+              hlsSeekSnapRef.current = () => {
+                window.clearTimeout(timer);
+                hls.off(Hls.Events.FRAG_BUFFERED, onFrag);
+              };
+              revealControls();
+              return;
+            }
+          }
+        } catch {
+          try {
+            v.currentTime = capped;
+          } catch {
+            /* ignore */
+          }
+        }
+        void v.play().catch(() => revealControls(true));
+        revealControls();
+        return;
+      }
+
       remuxBaseRef.current = 0;
       v.currentTime = capped;
-      setCurrent(capped);
       revealControls();
     },
     [revealControls, source, isLive, knownDuration, maxSeekableSeconds],
@@ -756,7 +996,7 @@ export function PlayerPage() {
       }
       if (e.key === "c" && !isLive) {
         e.preventDefault();
-        const tracks = textSubtitles(source);
+        const tracks = textSubtitles(subtitleTracksState);
         if (!tracks.length) return;
         setSubIndex((current) => {
           let next: number | null;
@@ -808,7 +1048,44 @@ export function PlayerPage() {
     zapChannel,
     selectAudioTrack,
     audioIndex,
+    subtitleTracksState,
   ]);
+
+  useEffect(() => {
+    // Seed once per title — do not wipe enriched tracks on audio re-resolve.
+    setSubtitleTracksState(source?.subtitles ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- item identity only
+  }, [source?.itemId, state?.identity?.jellyfinItemId, state?.identity?.tmdbId]);
+
+  useEffect(() => {
+    if (isLive || !state?.identity) return;
+    const ac = new AbortController();
+    const identity = state.identity;
+    void listPlaybackSubtitles(identity, {
+      existing: source?.subtitles,
+      provider: source?.provider,
+      signal: ac.signal,
+    })
+      .then((tracks) => {
+        if (ac.signal.aborted || !tracks.length) return;
+        setSubtitleTracksState((prev) => {
+          // Avoid churn when enrichment returns the same urls.
+          if (
+            prev.length === tracks.length &&
+            prev.every((t, i) => t.url === tracks[i]?.url && t.language === tracks[i]?.language)
+          ) {
+            return prev;
+          }
+          return tracks;
+        });
+      })
+      .catch(() => {
+        /* aborted or keep whatever resolve already provided */
+      });
+    return () => ac.abort();
+    // Intentionally keyed on identity + provider, not subtitles array identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- source.subtitles is seed data only
+  }, [state?.identity, source?.provider, isLive]);
 
   useEffect(() => {
     if (isLive) {
@@ -818,17 +1095,18 @@ export function PlayerPage() {
       return;
     }
     // Off by default; restore last language (or Off) when that track exists.
-    setSubIndex(resolveSubtitleIndex(textSubtitles(source)));
+    // Re-runs when async enrichment replaces the track list.
+    setSubIndex(resolveSubtitleIndex(textSubtitles(subtitleTracksState)));
     setCues([]);
     setSubsOpen(false);
-  }, [source, isLive]);
+  }, [isLive, subtitleTracksState]);
 
   useEffect(() => {
     if (subIndex == null || isLive) {
       setCues([]);
       return;
     }
-    const track = textSubtitles(source)[subIndex];
+    const track = textSubtitles(subtitleTracksState)[subIndex];
     if (!track) {
       setCues([]);
       return;
@@ -843,7 +1121,7 @@ export function PlayerPage() {
         if (!ac.signal.aborted) setCues([]);
       });
     return () => ac.abort();
-  }, [source, subIndex, isLive]);
+  }, [subtitleTracksState, subIndex, isLive]);
 
   useEffect(() => {
     if (!subsOpen) return;
@@ -855,50 +1133,88 @@ export function PlayerPage() {
   }, [subsOpen]);
 
   useEffect(() => {
-    remuxBaseRef.current = 0;
-    sourceGenRef.current += 1;
+    // Reset resume/progress guards only when the delivery URL changes.
     if (remuxSeekTimer.current != null) {
       window.clearTimeout(remuxSeekTimer.current);
       remuxSeekTimer.current = null;
     }
-    if (knownDuration > 0) setDuration(knownDuration);
-    if (source?.startPositionSeconds && source.startPositionSeconds > 30) {
-      setCurrent(source.startPositionSeconds);
+    hlsSeekSnapRef.current?.();
+    hlsSeekSnapRef.current = null;
+    remuxBaseRef.current = 0;
+    resumeAppliedRef.current = false;
+    progressStartedRef.current = false;
+    sourceGenRef.current += 1;
+    // keepPositionRef (audio remount) may arm pendingSeek. Continue Watching must
+    // NOT — stall recovery would keep yanking scrubbers back to ~minute 7.
+    const keep = keepPositionRef.current;
+    if (keep != null && keep > 0) {
+      pendingSeekRef.current = keep;
+      currentSecondsRef.current = keep;
+      setCurrent(keep);
+    } else {
+      pendingSeekRef.current = null;
+      const resume =
+        source?.startPositionSeconds != null && source.startPositionSeconds > 30
+          ? source.startPositionSeconds
+          : 0;
+      currentSecondsRef.current = resume;
+      setCurrent(resume);
     }
-  }, [source?.delivery.url, knownDuration, source?.startPositionSeconds]);
+  }, [source?.delivery.url]);
+
+  useEffect(() => {
+    if (knownDuration > 0) setDuration(knownDuration);
+  }, [knownDuration]);
+
+  const deliveryUrl = source?.delivery.url;
+  const playMethod = source?.playMethod;
+  const hlsFlag = source?.hls;
+  const mimeType = source?.mimeType;
+  const playSessionId = source?.playSessionId;
+  const mediaSourceId = source?.mediaSourceId;
+  const itemId = source?.itemId;
+  const resumeSeconds = source?.startPositionSeconds;
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !source) return;
+    if (!video || !deliveryUrl) return;
     const gen = ++sourceGenRef.current;
 
-    let url = source.delivery.url;
-    // Resume remux VOD at the saved absolute offset via server-side `-ss`.
-    if (
-      remuxVod &&
-      source.startPositionSeconds &&
-      source.startPositionSeconds > 30
-    ) {
+    // keepPositionRef wins (audio/language remount) over Continue Watching.
+    const keep = keepPositionRef.current;
+    if (keep != null) keepPositionRef.current = null;
+    const resume = resumeSecondsRef.current;
+    const resumeAt =
+      keep != null && keep > 0
+        ? keep
+        : !isLiveRef.current && resume != null && resume > 30
+          ? resume
+          : -1;
+
+    let url = deliveryUrl;
+    // Resume remux VOD at the saved absolute offset via server-side `-ss` (once).
+    if (remuxVod && !resumeAppliedRef.current && resumeAt > 0) {
       try {
         const abs = new URL(url, window.location.origin);
-        abs.searchParams.set("start", String(Math.floor(source.startPositionSeconds)));
+        abs.searchParams.set("start", String(Math.floor(resumeAt)));
         url =
           abs.origin === window.location.origin
             ? `${abs.pathname}${abs.search}`
             : abs.href;
-        remuxBaseRef.current = Math.floor(source.startPositionSeconds);
+        remuxBaseRef.current = Math.floor(resumeAt);
+        resumeAppliedRef.current = true;
       } catch {
         /* keep original url */
       }
     }
 
     const useHls =
-      source.hls ||
-      source.playMethod === "Transcode" ||
+      hlsFlag ||
+      playMethod === "Transcode" ||
       url.includes("m3u8") ||
-      source.mimeType?.includes("mpegurl");
+      mimeType?.includes("mpegurl");
     const useMpegTs =
-      source.mimeType?.includes("mp2t") ||
+      mimeType?.includes("mp2t") ||
       url.includes("/playback/dispatcharr/live/");
 
     hlsRef.current?.destroy();
@@ -986,31 +1302,132 @@ export function PlayerPage() {
       player.load();
       startLivePlayback();
     } else if (useHls && Hls.isSupported()) {
+      // Resume after MANIFEST_PARSED via currentTime — do not bake Continue Watching
+      // into config.startPosition (seekToStartPos would yank scrubbers back to it).
+      const jellyfinHls =
+        playMethod === "Transcode" || url.includes("/playback/jellyfin/");
       const hls = new Hls({
         enableWorker: true,
+        // Keep ahead-buffer modest so we do not race Jellyfin's on-demand transcoder.
+        maxBufferLength: jellyfinHls ? 18 : 30,
+        maxMaxBufferLength: jellyfinHls ? 36 : 60,
+        maxBufferSize: 40 * 1000 * 1000,
+        // Never bake Continue Watching into startPosition — hls.js seekToStartPos
+        // would refuse scrubbing earlier than that offset.
+        startPosition: -1,
+        autoStartLoad: resumeAt <= 0,
+        fragLoadingTimeOut: 120_000,
+        fragLoadingMaxRetry: 6,
+        fragLoadingRetryDelay: 1000,
+        manifestLoadingTimeOut: 60_000,
+        levelLoadingTimeOut: 60_000,
+        // Prefer steady realtime over aggressive multi-frag fetches on a slow hop.
+        maxStarvationDelay: 6,
+        maxLoadingDelay: 6,
         xhrSetup: (xhr) => {
           xhr.withCredentials = true;
         },
       });
       hlsRef.current = hls;
+      const loadAtPlayhead = () => {
+        const v = videoRef.current;
+        // Prefer pending/user playhead — video.currentTime may still be clamped
+        // to the Continue Watching buffer while a scrub target loads.
+        let at = -1;
+        if (pendingSeekRef.current != null) at = pendingSeekRef.current;
+        else if (currentSecondsRef.current > 0) at = currentSecondsRef.current;
+        else if (v && Number.isFinite(v.currentTime)) at = v.currentTime;
+        hls.startLoad(at);
+      };
+      let fatalRecoveries = 0;
+      let playbackStarted = false;
+      const startWhenBuffered = () => {
+        if (playbackStarted || sourceGenRef.current !== gen) return;
+        const v = videoRef.current;
+        if (!v) return;
+        let buffered = 0;
+        try {
+          if (v.buffered.length > 0) {
+            buffered = v.buffered.end(v.buffered.length - 1) - v.buffered.start(0);
+          }
+        } catch {
+          /* ignore */
+        }
+        // Jellyfin/Cloudflare: wait for ~2 target segments so the first 6s are covered.
+        const need = jellyfinHls ? 5.5 : 0.25;
+        if (buffered < need) return;
+        playbackStarted = true;
+        void v.play().catch(() => revealControls(true));
+      };
       hls.loadSource(url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (source.startPositionSeconds) {
-          video.currentTime = source.startPositionSeconds;
+        if (sourceGenRef.current !== gen) return;
+        if (resumeAt > 0) {
+          resumeAppliedRef.current = true;
+          try {
+            video.currentTime = resumeAt;
+          } catch {
+            /* ignore */
+          }
+          setCurrent(resumeAt);
+          hls.startLoad(resumeAt);
+        } else {
+          applyResumeOnce(video);
         }
-        void video.play().catch(() => revealControls(true));
+        if (!jellyfinHls) {
+          playbackStarted = true;
+          void video.play().catch(() => revealControls(true));
+        } else {
+          startWhenBuffered();
+        }
+      });
+      hls.on(Hls.Events.FRAG_BUFFERED, () => {
+        startWhenBuffered();
+      });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data.fatal) {
+          // Buffer stall while a slow segment finishes — nudge load, do not pause/play thrash.
+          if (
+            data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR ||
+            data.details === Hls.ErrorDetails.FRAG_LOAD_TIMEOUT
+          ) {
+            loadAtPlayhead();
+          }
+          return;
+        }
+        console.warn("[hls] fatal", data.type, data.details);
+        // Cap recoveries — unbounded recoverMediaError/startLoad loops the same
+        // 2–3 segments forever (play/pause thrash in the API logs).
+        if (fatalRecoveries >= 2) {
+          revealControls(true);
+          return;
+        }
+        fatalRecoveries += 1;
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          loadAtPlayhead();
+          return;
+        }
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          hls.recoverMediaError();
+          return;
+        }
+        revealControls(true);
       });
     } else if (useHls && video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = url;
       const onMeta = () => {
         if (sourceGenRef.current !== gen) return;
-        if (source.startPositionSeconds) {
+        if (resumeAt > 0) {
+          resumeAppliedRef.current = true;
           try {
-            video.currentTime = source.startPositionSeconds;
+            video.currentTime = resumeAt;
           } catch {
             /* ignore */
           }
+          setCurrent(resumeAt);
+        } else {
+          applyResumeOnce(video);
         }
         void video.play().catch(() => revealControls(true));
       };
@@ -1018,6 +1435,20 @@ export function PlayerPage() {
     } else {
       // Progressive VOD — do not force-mute on autoplay failure (that regressed film audio).
       video.src = url;
+      if (resumeAt > 0 && !remuxVod) {
+        const onMeta = () => {
+          if (sourceGenRef.current !== gen) return;
+          resumeAppliedRef.current = true;
+          try {
+            video.currentTime = resumeAt;
+          } catch {
+            /* ignore */
+          }
+          setCurrent(resumeAt);
+          void video.play().catch(() => revealControls(true));
+        };
+        video.addEventListener("loadedmetadata", onMeta, { once: true });
+      }
       void video.play().catch(() => revealControls(true));
     }
 
@@ -1034,45 +1465,51 @@ export function PlayerPage() {
       mpegtsRef.current?.destroy();
       mpegtsRef.current = null;
     };
-  }, [source, revealControls, remuxVod]);
+    // Key on stable delivery fields — NOT the whole `source` object identity.
+  }, [deliveryUrl, playMethod, hlsFlag, mimeType, remuxVod, revealControls, applyResumeOnce]);
+
+  const provider = source?.provider;
 
   useEffect(() => {
-    if (!source) return;
+    if (!deliveryUrl) return;
     const identity = state?.identity;
     const isIptv =
-      (source.provider === "dispatcharr" || source.provider === "cache") &&
+      (provider === "dispatcharr" || provider === "cache") &&
       Boolean(identity?.tmdbId) &&
       !isLive;
 
-    if (source.itemId) {
-      void reportProgress({
-        itemId: source.itemId,
-        positionSeconds: source.startPositionSeconds ?? 0,
-        event: "start",
-        playSessionId: source.playSessionId,
-        mediaSourceId: source.mediaSourceId,
-      });
-    } else if (isIptv && identity) {
-      // Do not report 0 — that wiped Continue Watching before the first progress tick.
-      void reportIptvProgress({
-        identity,
-        positionSeconds: source.startPositionSeconds ?? 0,
-        durationSeconds: knownDuration > 0 ? knownDuration : undefined,
-        event: "start",
-        title: state?.title,
-      });
+    if (!progressStartedRef.current) {
+      progressStartedRef.current = true;
+      if (itemId) {
+        void reportProgress({
+          itemId,
+          positionSeconds: resumeSeconds && resumeSeconds > 30 ? resumeSeconds : 0,
+          event: "start",
+          playSessionId,
+          mediaSourceId,
+        });
+      } else if (isIptv && identity) {
+        // Do not report 0 — that wiped Continue Watching before the first progress tick.
+        void reportIptvProgress({
+          identity,
+          positionSeconds: resumeSeconds && resumeSeconds > 30 ? resumeSeconds : 0,
+          durationSeconds: knownDuration > 0 ? knownDuration : undefined,
+          event: "start",
+          title: state?.title,
+        });
+      }
     }
 
     const interval = window.setInterval(() => {
       const v = videoRef.current;
       if (!v) return;
-      if (source.itemId) {
+      if (itemId) {
         void reportProgress({
-          itemId: source.itemId,
+          itemId,
           positionSeconds: v.currentTime,
           event: "progress",
-          playSessionId: source.playSessionId,
-          mediaSourceId: source.mediaSourceId,
+          playSessionId,
+          mediaSourceId,
           isPaused: v.paused,
         });
       } else if (isIptv && identity) {
@@ -1095,13 +1532,13 @@ export function PlayerPage() {
       window.clearInterval(interval);
       const v = videoRef.current;
       if (!v) return;
-      if (source.itemId) {
+      if (itemId) {
         void reportProgress({
-          itemId: source.itemId,
+          itemId,
           positionSeconds: v.currentTime,
           event: "stopped",
-          playSessionId: source.playSessionId,
-          mediaSourceId: source.mediaSourceId,
+          playSessionId,
+          mediaSourceId,
         });
       } else if (isIptv && identity) {
         void reportIptvProgress({
@@ -1118,7 +1555,18 @@ export function PlayerPage() {
         });
       }
     };
-  }, [source, state?.identity, state?.title, isLive, knownDuration]);
+  }, [
+    deliveryUrl,
+    provider,
+    itemId,
+    playSessionId,
+    mediaSourceId,
+    resumeSeconds,
+    state?.identity,
+    state?.title,
+    isLive,
+    knownDuration,
+  ]);
 
   if (!source) {
     return (
@@ -1133,7 +1581,7 @@ export function PlayerPage() {
 
   const progressPct = duration > 0 ? (current / duration) * 100 : 0;
   const bufferPct = duration > 0 ? (buffered / duration) * 100 : 0;
-  const subtitleTracks = textSubtitles(source);
+  const subtitleTracks = textSubtitles(subtitleTracksState);
   const audioTracks = source.audioTracks ?? [];
   const activeSubtitleLines = cues
     .filter((cue) => current >= cue.start && current < cue.end)
@@ -1175,15 +1623,43 @@ export function PlayerPage() {
           revealControls();
         }}
         onPause={() => {
+          // Ignore the synthetic pause from remux src teardown / load() during scrub.
+          if (pendingSeekRef.current != null || remuxSeekTimer.current != null) return;
           setPaused(true);
           const behind = measureLiveBehind();
           liveDriftRef.current.pausedAtWall = Date.now();
           liveDriftRef.current.behindAtPause = behind;
           revealControls(true);
         }}
+        onSeeking={() => {
+          setSeeking(true);
+        }}
+        onSeeked={(e) => {
+          const absolute = remuxBaseRef.current + e.currentTarget.currentTime;
+          if (
+            pendingSeekRef.current == null ||
+            Math.abs(absolute - pendingSeekRef.current) < 2.5
+          ) {
+            pendingSeekRef.current = null;
+            setSeeking(false);
+            setCurrent(absolute);
+          }
+        }}
         onTimeUpdate={(e) => {
           const v = e.currentTarget;
-          if (!seeking) setCurrent(remuxBaseRef.current + v.currentTime);
+          const absolute = remuxBaseRef.current + v.currentTime;
+          if (pendingSeekRef.current != null) {
+            // Hold scrubber on the requested target until media catches up.
+            if (Math.abs(absolute - pendingSeekRef.current) < 1.25) {
+              pendingSeekRef.current = null;
+              setSeeking(false);
+              currentSecondsRef.current = absolute;
+              setCurrent(absolute);
+            }
+          } else if (!seeking) {
+            currentSecondsRef.current = absolute;
+            setCurrent(absolute);
+          }
           if (v.buffered.length > 0) {
             try {
               setBuffered(remuxBaseRef.current + v.buffered.end(v.buffered.length - 1));
@@ -1194,22 +1670,27 @@ export function PlayerPage() {
           if (isLive) measureLiveBehind();
         }}
         onLoadedMetadata={(e) => {
+          // Prefer catalogue duration for Jellyfin HLS — MSE often reports only
+          // the Continue Watching buffer length until more segments load.
           setDuration(
-            finiteDuration(e.currentTarget.duration, knownDuration, remuxVod),
+            finiteDuration(
+              e.currentTarget.duration,
+              knownDuration,
+              remuxVod || cacheHls || (!isLive && knownDuration > 0),
+            ),
           );
           setVolume(e.currentTarget.volume);
           setMuted(e.currentTarget.muted);
-          if (
-            source.startPositionSeconds &&
-            remuxBaseRef.current === 0 &&
-            !isRemuxVodUrl(source.delivery.url)
-          ) {
-            e.currentTarget.currentTime = source.startPositionSeconds;
-          }
+          // HLS resume is handled via startPosition / MANIFEST_PARSED only.
+          // Re-applying on every loadedmetadata (error recovery) fights the playhead.
         }}
         onDurationChange={(e) =>
           setDuration(
-            finiteDuration(e.currentTarget.duration, knownDuration, remuxVod),
+            finiteDuration(
+              e.currentTarget.duration,
+              knownDuration,
+              remuxVod || cacheHls || (!isLive && knownDuration > 0),
+            ),
           )
         }
         onVolumeChange={(e) => {
@@ -1337,7 +1818,8 @@ export function PlayerPage() {
                   value={Math.min(current, duration || 0)}
                   onPointerDown={() => setSeeking(true)}
                   onPointerUp={(e) => {
-                    setSeeking(false);
+                    // Keep seeking/pendingSeek armed until onSeeked/timeupdate catches up —
+                    // clearing here let timeupdate yank the bar back to the old position.
                     onSeek(Number((e.target as HTMLInputElement).value));
                   }}
                   onKeyUp={(e) => {
@@ -1352,6 +1834,7 @@ export function PlayerPage() {
                   }}
                   onChange={(e) => {
                     // Preview only while dragging — remux restart commits on pointer up.
+                    pendingSeekRef.current = Number(e.target.value);
                     setCurrent(Number(e.target.value));
                   }}
                   aria-label="Seek"

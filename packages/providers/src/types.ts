@@ -46,6 +46,13 @@ export interface PlaybackProvider extends MediaProvider {
   resolvePlayback(
     userContext: UserContext,
     identity: MediaIdentity,
+    opts?: {
+      /** Resume / scrub offset — passed to Jellyfin as StartTimeTicks for HLS transcode. */
+      startPositionSeconds?: number;
+      audioStreamIndex?: number;
+      /** Optional client-measured throughput cap (bits/s). */
+      maxStreamingBitrate?: number;
+    },
   ): Promise<PlaybackSource | null>;
   reportProgress(
     userContext: UserContext,

@@ -8,6 +8,7 @@ import type {
   MediaIdentity,
   PlaybackResolveResult,
   PlaybackSource,
+  SubtitleTrack,
 } from "@streamerr/shared";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -187,19 +188,97 @@ export function listRequests(opts?: {
   }>(`/api/requests${suffix}`);
 }
 
-export function resolvePlayback(identity: MediaIdentity) {
+export function resolvePlayback(
+  identity: MediaIdentity,
+  opts?: {
+    startPositionSeconds?: number;
+    audioStreamIndex?: number;
+    maxStreamingBitrate?: number;
+  },
+) {
   return request<PlaybackResolveResult>("/api/playback/resolve", {
     method: "POST",
-    body: JSON.stringify({ identity }),
+    body: JSON.stringify({
+      identity,
+      startPositionSeconds: opts?.startPositionSeconds,
+      audioStreamIndex: opts?.audioStreamIndex,
+      maxStreamingBitrate: opts?.maxStreamingBitrate,
+    }),
   });
 }
 
 const PLAY_BUFFER_POLL_MS = 500;
 const PLAY_BUFFER_TIMEOUT_MS = 60_000;
+const BW_PROBE_BYTES = 1_500_000;
+const BW_PROBE_CACHE_KEY = "streamerr.bwProbe";
+const BW_PROBE_TTL_MS = 5 * 60_000;
+const BW_PROBE_HEADROOM = 0.65;
+const BW_MIN = 2_000_000;
+const BW_MAX = 20_000_000;
+
+function clampBitrate(bps: number): number {
+  if (!Number.isFinite(bps) || bps <= 0) return 8_000_000;
+  return Math.min(BW_MAX, Math.max(BW_MIN, Math.floor(bps)));
+}
+
+/**
+ * Measure browser→nginx→Jellyfin throughput via a Range probe (same hop as HLS).
+ * Cached in sessionStorage so Play is not delayed on every title.
+ */
+export async function measurePlaybackBitrate(itemId?: string): Promise<number | undefined> {
+  try {
+    const cached = sessionStorage.getItem(BW_PROBE_CACHE_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached) as { bps?: number; at?: number };
+      if (
+        parsed.bps &&
+        parsed.at &&
+        Date.now() - parsed.at < BW_PROBE_TTL_MS &&
+        parsed.bps >= BW_MIN
+      ) {
+        return parsed.bps;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const qs = itemId ? `?itemId=${encodeURIComponent(itemId)}` : "";
+    const t0 = performance.now();
+    const res = await fetch(`/api/playback/bandwidth-probe${qs}`, {
+      credentials: "include",
+      headers: {
+        Range: `bytes=0-${BW_PROBE_BYTES - 1}`,
+        Accept: "application/octet-stream",
+      },
+    });
+    if (!res.ok && res.status !== 206) return undefined;
+    const buf = await res.arrayBuffer();
+    const seconds = Math.max((performance.now() - t0) / 1000, 0.001);
+    if (buf.byteLength < 32_000) return undefined;
+    const bps = clampBitrate(((buf.byteLength * 8) / seconds) * BW_PROBE_HEADROOM);
+    try {
+      sessionStorage.setItem(
+        BW_PROBE_CACHE_KEY,
+        JSON.stringify({ bps, at: Date.now() }),
+      );
+    } catch {
+      /* ignore quota */
+    }
+    return bps;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Resolve a playable source. IPTV Play auto-starts a cache download and may
  * buffer until enough bytes exist for local remux (max IPTV connections = 1).
+ *
+ * While buffering, poll `/api/acquisitions/:id` only — do not re-POST resolve
+ * (that re-runs Jellyfin/cache/IPTV pick every tick). One final resolve when
+ * the acquisition becomes playable.
  */
 export async function resolvePlaybackForPlay(
   identity: MediaIdentity,
@@ -209,16 +288,17 @@ export async function resolvePlaybackForPlay(
   },
 ): Promise<PlaybackSource> {
   const started = Date.now();
-  let acquisitionId: string | undefined;
+  const maxStreamingBitrate = await measurePlaybackBitrate(identity.jellyfinItemId);
+
+  const first = await resolvePlayback(identity, { maxStreamingBitrate });
+  if (first.status === "ready") {
+    return withCatalogueDuration(first.source, opts?.meta);
+  }
+
+  const acquisitionId = first.acquisitionId;
 
   while (Date.now() - started < PLAY_BUFFER_TIMEOUT_MS) {
-    const result = await resolvePlayback(identity);
-    if (result.status === "ready") {
-      return withCatalogueDuration(result.source, opts?.meta);
-    }
-
-    acquisitionId = result.acquisitionId;
-    const { item } = await getAcquisition(result.acquisitionId);
+    const { item } = await getAcquisition(acquisitionId);
     if (item.state === "failed" || item.state === "cancelled") {
       throw new Error(
         item.state === "cancelled"
@@ -232,17 +312,36 @@ export async function resolvePlaybackForPlay(
       totalBytes: item.totalBytes,
     });
     if (item.playbackAvailable) {
-      // Resolve again so we get a proper cache PlaybackSource.
-      continue;
+      const ready = await resolvePlayback(identity, { maxStreamingBitrate });
+      if (ready.status === "ready") {
+        return withCatalogueDuration(ready.source, opts?.meta);
+      }
+      // Acquisition claimed playable but resolve disagreed — brief wait + retry.
     }
     await new Promise((r) => setTimeout(r, PLAY_BUFFER_POLL_MS));
   }
 
-  throw new Error(
-    acquisitionId
-      ? "Timed out waiting for download to become playable"
-      : "No playable source",
-  );
+  throw new Error("Timed out waiting for download to become playable");
+}
+
+/** Fetch subtitle tracks for a title (async enrichment after Play resolves). */
+export function listPlaybackSubtitles(
+  identity: MediaIdentity,
+  opts?: {
+    existing?: SubtitleTrack[];
+    provider?: PlaybackSource["provider"];
+    signal?: AbortSignal;
+  },
+) {
+  return request<{ subtitles: SubtitleTrack[] }>("/api/playback/subtitles", {
+    method: "POST",
+    body: JSON.stringify({
+      identity,
+      existing: opts?.existing,
+      provider: opts?.provider,
+    }),
+    signal: opts?.signal,
+  }).then((r) => r.subtitles);
 }
 
 /** Fill missing PlaybackSource.durationSeconds from catalogue metadata. */

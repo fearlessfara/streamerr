@@ -26,6 +26,11 @@ export class IptvConnectionManager {
     { kind: IptvConnKind; label?: string; acquiredAt: number; abort: AbortController }
   >();
   private seq = 0;
+  /**
+   * Live hold for nginx X-Accel: the API request ends after 204, but nginx keeps
+   * the upstream open. Keep one live lease until another channel is tuned.
+   */
+  private liveHold?: { uuid: string; lease: IptvLease };
 
   constructor(private readonly maxConnections: number) {}
 
@@ -88,6 +93,25 @@ export class IptvConnectionManager {
     } catch {
       /* ignore */
     }
+  }
+
+  /**
+   * Hold a live IPTV slot for nginx-proxied MPEG-TS (no client disconnect signal).
+   * Retunes replace the previous hold; downloads remain preemptible by live priority.
+   */
+  holdLive(uuid: string): IptvLease {
+    if (this.liveHold?.uuid === uuid) return this.liveHold.lease;
+    this.liveHold?.lease.release();
+    const lease = this.acquire("live", { label: `live:${uuid}` });
+    this.liveHold = { uuid, lease };
+    return lease;
+  }
+
+  releaseLiveHold(uuid?: string): void {
+    if (!this.liveHold) return;
+    if (uuid && this.liveHold.uuid !== uuid) return;
+    this.liveHold.lease.release();
+    this.liveHold = undefined;
   }
 
   snapshot(): Array<{ id: string; kind: IptvConnKind; label?: string; acquiredAt: number }> {

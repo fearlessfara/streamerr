@@ -7,6 +7,19 @@ const EnvSchema = z.object({
   STREAMERR_SESSION_SECRET: z.string().min(16).default("dev-only-change-me-please"),
   STREAMERR_DATA_DIR: z.string().default("./data"),
   STREAMERR_PUBLIC_URL: z.string().default("http://localhost:8787"),
+  /**
+   * `nginx` — API returns X-Accel-Redirect; nginx sends media bytes.
+   * `node` — API pipes upstream / local files (local Vite/dev default).
+   */
+  STREAMERR_MEDIA_PLANE: z.enum(["nginx", "node"]).default("node"),
+  /**
+   * When true (default), the API process runs the HLS packager loop.
+   * Docker runs a dedicated packager process and sets this to false.
+   */
+  STREAMERR_EMBED_PACKAGER: z
+    .string()
+    .optional()
+    .transform((v) => v !== "0" && v !== "false"),
   STREAMERR_USE_MOCKS: z
     .string()
     .optional()
@@ -35,6 +48,7 @@ const EnvSchema = z.object({
    */
   STREAMERR_PREFERRED_LANGUAGES: z.string().default("en"),
   FFMPEG_PATH: z.string().optional(),
+  FFPROBE_PATH: z.string().optional(),
   NODE_ENV: z.string().optional(),
 });
 

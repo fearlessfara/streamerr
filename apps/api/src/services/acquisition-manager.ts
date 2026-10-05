@@ -20,8 +20,8 @@ import {
   type LibraryNamingMeta,
 } from "./library-path.js";
 
-/** Bytes on disk before progressive local play is allowed (IPTV Play auto-cache). */
-const PLAYABLE_BYTES = 2_000_000;
+import { hlsPlaybackReady, removeHlsDir } from "./hls-paths.js";
+import type { PackagerJob } from "./hls-packager.js";
 
 export class AcquisitionManager {
   private readonly controllers = new Map<string, AbortController>();
@@ -94,7 +94,17 @@ export class AcquisitionManager {
       .from(acquisitionsTable)
       .where(eq(acquisitionsTable.id, id))
       .all()[0];
-    return row ? this.rowToAcquisition(row) : undefined;
+    if (!row) return undefined;
+    const job = this.rowToAcquisition(row);
+    // Reflect HLS readiness without writing (avoids re-entrant get→markHlsReady).
+    if (!job.playbackAvailable && hlsPlaybackReady(this.dataDir, job.id)) {
+      return {
+        ...job,
+        playbackAvailable: true,
+        state: job.state === "completed" ? "completed" : "playable",
+      };
+    }
+    return job;
   }
 
   findByIdentity(identity: MediaIdentity): Acquisition | undefined {
@@ -127,6 +137,7 @@ export class AcquisitionManager {
     if (job.state === "cancelled" && (!job.localPath || !existsSync(job.localPath))) {
       return null;
     }
+    const playable = this.isPlaybackReady(job);
     return {
       provider: "cache" as const,
       available: true,
@@ -134,9 +145,49 @@ export class AcquisitionManager {
       localPath: job.localPath,
       bytesDownloaded: job.bytesDownloaded,
       totalBytes: job.totalBytes,
-      playbackAvailable: job.playbackAvailable,
+      playbackAvailable: playable,
       complete: job.state === "completed",
     };
+  }
+
+  /** True when the HLS packager has published at least one segment. */
+  isPlaybackReady(job: Pick<Acquisition, "id" | "playbackAvailable">): boolean {
+    return job.playbackAvailable || hlsPlaybackReady(this.dataDir, job.id);
+  }
+
+  /** Jobs the HLS packager should consider. */
+  listPackagerJobs(): PackagerJob[] {
+    return this.list()
+      .filter(
+        (a) =>
+          Boolean(a.localPath) &&
+          (a.state === "downloading" ||
+            a.state === "playable" ||
+            a.state === "queued" ||
+            a.state === "completed"),
+      )
+      .map((a) => ({
+        id: a.id,
+        localPath: a.localPath!,
+        downloadComplete: a.state === "completed",
+        bytesDownloaded: a.bytesDownloaded,
+      }));
+  }
+
+  /** Called by the packager when index.m3u8 has a media segment. */
+  markHlsReady(id: string): void {
+    const row = this.db
+      .select()
+      .from(acquisitionsTable)
+      .where(eq(acquisitionsTable.id, id))
+      .all()[0];
+    if (!row) return;
+    if (row.state === "cancelled" || row.state === "failed") return;
+    if (row.playbackAvailable && row.state === "playable") return;
+    this.patch(id, {
+      playbackAvailable: true,
+      state: row.state === "completed" ? "completed" : "playable",
+    });
   }
 
   /** Start or reuse a CACHE acquisition for IPTV Play (single connection). */
@@ -252,7 +303,8 @@ export class AcquisitionManager {
     const job = this.get(id);
     if (!job) return undefined;
     this.controllers.get(id)?.abort();
-    return this.patch(id, { state: "cancelled" });
+    removeHlsDir(this.dataDir, id);
+    return this.patch(id, { state: "cancelled", playbackAvailable: false });
   }
 
   /** Atomic cache → library promotion without re-download. */
@@ -272,6 +324,7 @@ export class AcquisitionManager {
     const dest = await this.libraryDest(job.identity, meta);
     await mkdir(dirname(dest), { recursive: true });
     renameSync(job.localPath, dest);
+    removeHlsDir(this.dataDir, id);
     const updated = this.patch(id, {
       mode: "library",
       localPath: dest,
@@ -357,13 +410,14 @@ export class AcquisitionManager {
         signal: controller.signal,
         onProgress: (bytes, total) => {
           if (this.get(id)?.state === "cancelled") return;
-          const playable =
-            bytes >= PLAYABLE_BYTES || (total !== undefined && bytes / total >= 0.02);
+          // Playability comes from the HLS packager (first segment), not byte thresholds.
+          const cur = this.get(id);
+          const hlsReady = cur ? this.isPlaybackReady(cur) : false;
           this.patch(id, {
             bytesDownloaded: bytes,
             totalBytes: total,
-            playbackAvailable: playable,
-            state: playable ? "playable" : "downloading",
+            playbackAvailable: hlsReady,
+            state: hlsReady ? "playable" : "downloading",
           });
         },
       });

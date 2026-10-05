@@ -2,6 +2,7 @@ import { existsSync, unlinkSync, statSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import type { AppDb } from "../db/client.js";
 import { acquisitions as acquisitionsTable } from "../db/schema.js";
+import { removeHlsDir } from "./hls-paths.js";
 
 export interface CacheManagerOptions {
   /** Max total bytes for cache-mode acquisitions on disk. */
@@ -10,6 +11,8 @@ export interface CacheManagerOptions {
   ttlMs: number;
   /** Protect files touched (played) within this window. */
   protectMs?: number;
+  /** Data dir for HLS sidecar cleanup. */
+  dataDir?: string;
 }
 
 /**
@@ -102,6 +105,7 @@ export class CacheManager {
     } catch {
       return false;
     }
+    if (this.opts.dataDir) removeHlsDir(this.opts.dataDir, id);
     this.db.delete(acquisitionsTable).where(eq(acquisitionsTable.id, id)).run();
     this.touched.delete(id);
     return true;

@@ -2,6 +2,15 @@ export * from "./types.js";
 export * from "./http.js";
 export { JellyfinProvider } from "./jellyfin/provider.js";
 export {
+  BANDWIDTH_PROBE_BYTES,
+  DEFAULT_STREAMING_BITRATE,
+  MAX_STREAMING_BITRATE,
+  MIN_STREAMING_BITRATE,
+  bandwidthProbeRangeHeader,
+  bitrateFromProbe,
+  clampStreamingBitrate,
+} from "./jellyfin/bandwidth.js";
+export {
   itemMatchesTmdb,
   hasPlayableMedia,
   extractTmdbId,

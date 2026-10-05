@@ -40,23 +40,56 @@ export class PlaybackResolver {
   async resolve(
     userContext: UserContext,
     identity: MediaIdentity,
+    opts?: {
+      /** Jellyfin HLS transcode seek/resume — StartTimeTicks. */
+      startPositionSeconds?: number;
+      audioStreamIndex?: number;
+      maxStreamingBitrate?: number;
+    },
   ): Promise<PlaybackResolveResult | null> {
-    const result = await this.pickSource(userContext, identity);
+    const result = await this.pickSource(userContext, identity, opts);
     if (!result) return null;
-    if (result.status === "buffering") return result;
-    if (isLivePlayback(result.source)) return result;
+    // Return the stream URL immediately — subtitle enrichment is async via
+    // listSubtitles / POST /api/playback/subtitles so Play is not blocked on
+    // Bazarr/Seerr/Jellyfin subtitle lookups.
+    return result;
+  }
+
+  /**
+   * Merge Bazarr + Jellyfin text subtitle tracks for a title.
+   * Call after playback has started; do not gate resolve on this.
+   */
+  async listSubtitles(
+    userContext: UserContext,
+    identity: MediaIdentity,
+    opts?: {
+      existing?: SubtitleTrack[];
+      provider?: PlaybackSource["provider"];
+    },
+  ): Promise<SubtitleTrack[]> {
     try {
-      const source = await this.withSubtitles(userContext, identity, result.source);
-      return { status: "ready", source };
+      const stub: PlaybackSource = {
+        provider: opts?.provider ?? "cache",
+        delivery: { mode: "proxy", url: "" },
+        directPlay: true,
+        subtitles: opts?.existing,
+      };
+      const enriched = await this.withSubtitles(userContext, identity, stub);
+      return enriched.subtitles ?? [];
     } catch (err) {
       console.error("[subtitles] lookup failed", err);
-      return result;
+      return opts?.existing?.filter((t) => Boolean(t.url)) ?? [];
     }
   }
 
   private async pickSource(
     userContext: UserContext,
     identity: MediaIdentity,
+    opts?: {
+      startPositionSeconds?: number;
+      audioStreamIndex?: number;
+      maxStreamingBitrate?: number;
+    },
   ): Promise<PlaybackResolveResult | null> {
     // 1) Jellyfin library
     if (identity.jellyfinItemId || identity.tmdbId) {
@@ -78,7 +111,11 @@ export class PlaybackResolver {
           }
         }
         if (resolvedIdentity.jellyfinItemId) {
-          const source = await this.jellyfin.resolvePlayback(userContext, resolvedIdentity);
+          const source = await this.jellyfin.resolvePlayback(userContext, resolvedIdentity, {
+            startPositionSeconds: opts?.startPositionSeconds,
+            audioStreamIndex: opts?.audioStreamIndex,
+            maxStreamingBitrate: opts?.maxStreamingBitrate,
+          });
           if (source) return { status: "ready", source };
         }
       } catch {
@@ -146,10 +183,11 @@ export class PlaybackResolver {
       provider: "cache",
       delivery: {
         mode: "proxy",
-        url: `/api/playback/cache/${cache.acquisitionId}`,
+        url: `/api/playback/cache/${cache.acquisitionId}/hls/index.m3u8`,
       },
       directPlay: true,
-      mimeType: "video/mp4",
+      hls: true,
+      mimeType: "application/vnd.apple.mpegurl",
       acquisitionId: cache.acquisitionId,
       bytesDownloaded: cache.bytesDownloaded,
       totalBytes: cache.totalBytes,
@@ -334,13 +372,6 @@ function acquisitionFromMedia(
     },
     durationSeconds: metadataDurationSeconds(media),
   };
-}
-
-function isLivePlayback(source: PlaybackSource): boolean {
-  return (
-    Boolean(source.mimeType?.includes("mp2t")) ||
-    source.delivery.url.includes("/playback/dispatcharr/live/")
-  );
 }
 
 function metadataDurationSeconds(

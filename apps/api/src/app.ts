@@ -55,7 +55,6 @@ export async function buildApp(ctx: AppContext) {
       },
     },
     genReqId: () => randomUUID(),
-    disableRequestLogging: false,
   });
 
   await app.register(cors, {

@@ -146,8 +146,11 @@ type PlaybackDelivery =
   | { mode: "proxy"; url: string };
 ```
 
-- Jellyfin: MVP proxy acceptable; architecture must allow later direct/tokenized delivery (Node is not a permanent media relay).
-- Dispatcharr: never expose raw IPTV credentials; use Dispatcharr’s proxy and/or Streamerr-owned authenticated routes.
+- One public Streamerr origin. The browser only talks to Streamerr URLs.
+- **Docker / production:** nginx is the media hop. After session auth, the API returns `X-Accel-Redirect` and nginx sends bytes (Jellyfin, Dispatcharr, or local HLS). Provider tokens stay on the server.
+- **Local Vite/dev:** `STREAMERR_MEDIA_PLANE=node` — the API may still pipe media for convenience.
+- Jellyfin and Dispatcharr stay on the private network (unpublished ports).
+- IPTV VOD Play: one download to disk + HLS packager (event playlist under `$DATA/hls/{acquisitionId}/`). Resolve is ready when the first segment exists.
 
 ## Acquisition
 
@@ -166,12 +169,13 @@ DispatcharrProvider → AcquisitionSource → AcquisitionManager → DownloadTra
 
 ### IPTV Play = auto-cache (connection limit 1)
 
-With a single IPTV upstream slot, Play must not open a remux stream and a download at once.
+With a single IPTV upstream slot, Play must not open a second IPTV stream for remux.
 
 1. `PlaybackResolver` starts (or resumes) a CACHE acquisition for the Dispatcharr title.
-2. Resolve returns `buffering` until ~2MB is on disk, then `ready` with `/api/playback/cache/:id`.
-3. The player remuxes the local file while the same acquisition connection finishes downloading.
-4. UI shows cache TTL (“Cached · N days left”) and **Add to Library** next to Play (promote); no separate “download icons”.
+2. The HLS packager writes an event playlist beside the growing file (video copy; audio copy or AAC).
+3. Resolve returns `buffering` until the first HLS segment exists, then `ready` with `/api/playback/cache/:id/hls/index.m3u8`.
+4. The player uses hls.js; seek is a segment request. When the download completes, the playlist gets `#EXT-X-ENDLIST`.
+5. UI shows cache TTL (“Cached · N days left”) and **Add to Library** next to Play (promote); no separate “download icons”.
 
 ### Atomic promotion (Phase 5)
 
@@ -207,9 +211,13 @@ In-memory cache with TTLs for discovery and availability. Abstraction allows Red
 
 ## Browser playback notes
 
-- Jellyfin: DeviceProfile rejects AC3/DTS DirectPlay; DirectStream/Transcode force AAC.
-- Dispatcharr VOD Play: auto-cache then local remux (see above). Cache remux scrubbing uses `?start=` + file `-ss`. Direct IPTV remux remains for debug/`raw` only.
-- Live TV: MPEG-TS via mpegts.js MSE.
+- Jellyfin: DeviceProfile rejects AC3/DTS DirectPlay; DirectStream/Transcode force AAC. Media bytes via nginx when `STREAMERR_MEDIA_PLANE=nginx`.
+- Dispatcharr VOD Play: auto-cache + HLS packager (see above). Direct IPTV VOD remains `?raw=1` debug only.
+- Live TV: MPEG-TS via mpegts.js MSE (nginx proxies Dispatcharr when media plane is nginx).
+
+## Process layout (Docker)
+
+One Streamerr container runs nginx (public port), the API (loopback), and the HLS packager. Jellyfin and Dispatcharr remain separate containers you already run.
 
 ## Implementation stop
 
