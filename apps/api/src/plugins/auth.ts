@@ -16,6 +16,10 @@ function sessionIdFromRequest(req: FastifyRequest): string | undefined {
   const header = req.headers[SESSION_HEADER];
   const fromHeader = Array.isArray(header) ? header[0] : header;
   if (fromHeader?.trim()) return fromHeader.trim();
+  // React Native Image often cannot attach custom headers; TV artwork uses ?streamerr_session=.
+  const query = req.query as Record<string, unknown> | undefined;
+  const fromQuery = query?.[SESSION_COOKIE];
+  if (typeof fromQuery === "string" && fromQuery.trim()) return fromQuery.trim();
   const raw = req.headers.cookie;
   if (!raw) return undefined;
   const part = raw.split(";").map((s) => s.trim()).find((s) => s.startsWith(`${SESSION_COOKIE}=`));

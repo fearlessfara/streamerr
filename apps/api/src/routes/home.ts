@@ -7,6 +7,7 @@ import { requireAuth } from "../plugins/auth.js";
 import { jellyfinTmdbIndex } from "../db/schema.js";
 import { IptvProgressStore } from "../services/iptv-progress.js";
 import { buildHomeDiscoveryRails } from "../services/catalog-rails.js";
+import { applyTmdbArtwork } from "../services/media-enrichment.js";
 
 /** Prefer a real next episode from Dispatcharr/Jellyfin catalogues (handles season wrap). */
 async function refineIptvNextUp(
@@ -171,8 +172,15 @@ export async function registerHomeRoutes(app: FastifyInstance, ctx: AppContext):
       { id: "recent", title: "Recently Added", items: recentlyAdded },
     ].filter((row) => row.items.length > 0);
 
+    const personalWithArt = await Promise.all(
+      personal.map(async (row) => ({
+        ...row,
+        items: await applyTmdbArtwork(ctx, row.items, userContext),
+      })),
+    );
+
     return {
-      rows: [...personal, ...discoveryRails],
+      rows: [...personalWithArt, ...discoveryRails],
     };
   });
 }

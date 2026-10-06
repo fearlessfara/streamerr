@@ -55,6 +55,9 @@ export function mapJellyfinItemToMedia(
   return {
     identity: {
       jellyfinItemId: item.Id,
+      ...(item.Type === "Episode" && item.SeriesId
+        ? { jellyfinSeriesId: item.SeriesId }
+        : {}),
       ...(tmdbId !== undefined ? { tmdbId } : {}),
       mediaType,
       ...(item.Type === "Episode"

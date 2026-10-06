@@ -8,6 +8,7 @@ import {
   libraryKeysFromItems,
   type CatalogRail,
 } from "../services/catalog-rails.js";
+import { applyTmdbArtwork } from "../services/media-enrichment.js";
 
 export async function registerCatalogRoutes(
   app: FastifyInstance,
@@ -31,7 +32,7 @@ export async function registerCatalogRoutes(
           search: query.search?.trim() || undefined,
         })
         .catch(() => ({ items: [] as Media[], total: 0 }));
-      library = result.items;
+      library = await applyTmdbArtwork(ctx, result.items, userContext);
     }
 
     const libraryKeys = libraryKeysFromItems(library);

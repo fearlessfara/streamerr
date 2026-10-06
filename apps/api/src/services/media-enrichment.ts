@@ -76,10 +76,14 @@ export async function resolveMediaByTmdb(
         ? { overview: jellyfinMedia.metadata.overview }
         : {}),
       posterUrl:
-        base.metadata.posterUrl ??
+        seerrMedia?.metadata.posterUrl ??
         jellyfinMedia?.metadata.posterUrl ??
-        dispatcharrMedia?.metadata.posterUrl,
-      backdropUrl: base.metadata.backdropUrl ?? jellyfinMedia?.metadata.backdropUrl,
+        dispatcharrMedia?.metadata.posterUrl ??
+        base.metadata.posterUrl,
+      backdropUrl:
+        seerrMedia?.metadata.backdropUrl ??
+        jellyfinMedia?.metadata.backdropUrl ??
+        base.metadata.backdropUrl,
       // Prefer Seerr year when Dispatcharr/list rows omit it.
       year: base.metadata.year ?? seerrMedia?.metadata.year ?? jellyfinMedia?.metadata.year,
     },
@@ -173,4 +177,127 @@ export function enrichDiscoveryRow(
       preferredAction: resolvePreferredAction(availability),
     };
   });
+}
+
+type ArtworkKey = `${"movie" | "tv"}:${number}`;
+
+type CachedArt = {
+  posterUrl?: string;
+  backdropUrl?: string;
+  expiresAt: number;
+};
+
+const ART_TTL_MS = 1000 * 60 * 60 * 6;
+const artCache = new Map<ArtworkKey, CachedArt>();
+const seriesTmdbCache = new Map<string, { tmdbId?: number; expiresAt: number }>();
+
+function artKey(mediaType: "movie" | "tv", tmdbId: number): ArtworkKey {
+  return `${mediaType}:${tmdbId}`;
+}
+
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, Math.max(items.length, 1)) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]!);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+/**
+ * Prefer public TMDb CDN posters/backdrops (via Seerr) over Jellyfin image-proxy URLs.
+ * Cuts Streamerr/Jellyfin image load and works on TV Image views that can't send auth headers.
+ */
+export async function applyTmdbArtwork(
+  ctx: AppContext,
+  items: Media[],
+  userContext?: UserContext,
+): Promise<Media[]> {
+  if (items.length === 0) return items;
+  const getDetails = ctx.seerr.getDetails?.bind(ctx.seerr);
+  if (!getDetails) return items;
+
+  const now = Date.now();
+  const needed = new Map<ArtworkKey, { mediaType: "movie" | "tv"; tmdbId: number }>();
+
+  const seriesIds = new Set<string>();
+  for (const item of items) {
+    const { mediaType, tmdbId, jellyfinSeriesId } = item.identity;
+    if ((mediaType === "movie" || mediaType === "tv") && tmdbId) {
+      const key = artKey(mediaType, tmdbId);
+      const hit = artCache.get(key);
+      if (!hit || hit.expiresAt < now) needed.set(key, { mediaType, tmdbId });
+    } else if (mediaType === "episode" && jellyfinSeriesId) {
+      seriesIds.add(jellyfinSeriesId);
+    }
+  }
+
+  if (userContext && seriesIds.size > 0 && ctx.jellyfin.getByJellyfinItemId) {
+    await mapPool([...seriesIds], 4, async (seriesId) => {
+      const cached = seriesTmdbCache.get(seriesId);
+      if (cached && cached.expiresAt >= now) {
+        if (cached.tmdbId) {
+          const key = artKey("tv", cached.tmdbId);
+          const hit = artCache.get(key);
+          if (!hit || hit.expiresAt < now) needed.set(key, { mediaType: "tv", tmdbId: cached.tmdbId });
+        }
+        return;
+      }
+      const series = await ctx.jellyfin.getByJellyfinItemId(userContext, seriesId).catch(() => null);
+      const seriesTmdb = series?.identity.tmdbId;
+      seriesTmdbCache.set(seriesId, { tmdbId: seriesTmdb, expiresAt: now + ART_TTL_MS });
+      if (seriesTmdb) {
+        const key = artKey("tv", seriesTmdb);
+        const hit = artCache.get(key);
+        if (!hit || hit.expiresAt < now) needed.set(key, { mediaType: "tv", tmdbId: seriesTmdb });
+      }
+    });
+  }
+
+  await mapPool([...needed.values()], 4, async ({ mediaType, tmdbId }) => {
+    const key = artKey(mediaType, tmdbId);
+    try {
+      const details = await getDetails(mediaType, tmdbId);
+      artCache.set(key, {
+        posterUrl: details?.metadata.posterUrl,
+        backdropUrl: details?.metadata.backdropUrl,
+        expiresAt: now + ART_TTL_MS,
+      });
+    } catch {
+      artCache.set(key, { expiresAt: now + 60_000 });
+    }
+  });
+
+  return items.map((item) => {
+    let lookup: ArtworkKey | null = null;
+    const { mediaType, tmdbId, jellyfinSeriesId } = item.identity;
+    if ((mediaType === "movie" || mediaType === "tv") && tmdbId) {
+      lookup = artKey(mediaType, tmdbId);
+    } else if (mediaType === "episode" && jellyfinSeriesId) {
+      const seriesTmdb = seriesTmdbCache.get(jellyfinSeriesId)?.tmdbId;
+      if (seriesTmdb) lookup = artKey("tv", seriesTmdb);
+    }
+    if (!lookup) return item;
+    const art = artCache.get(lookup);
+    if (!art?.posterUrl && !art?.backdropUrl) return item;
+
+    return {
+      ...item,
+      metadata: {
+        ...item.metadata,
+        posterUrl: art.posterUrl ?? item.metadata.posterUrl,
+        backdropUrl: art.backdropUrl ?? item.metadata.backdropUrl,
+      },
+    };
+  });
+}
+
+/** @internal test helper */
+export function clearTmdbArtworkCache(): void {
+  artCache.clear();
+  seriesTmdbCache.clear();
 }

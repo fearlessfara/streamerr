@@ -5,6 +5,8 @@ export type MediaType = z.infer<typeof MediaTypeSchema>;
 
 export const MediaIdentitySchema = z.object({
   jellyfinItemId: z.string().optional(),
+  /** Parent series id when this row is an episode (for TMDb series artwork). */
+  jellyfinSeriesId: z.string().optional(),
   tmdbId: z.number().int().positive().optional(),
   tvdbId: z.number().int().positive().optional(),
   mediaType: MediaTypeSchema,

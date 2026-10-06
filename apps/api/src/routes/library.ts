@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { requireAuth } from "../plugins/auth.js";
+import { applyTmdbArtwork } from "../services/media-enrichment.js";
 
 export async function registerLibraryRoutes(
   app: FastifyInstance,
@@ -23,12 +24,16 @@ export async function registerLibraryRoutes(
       return { items: [], total: 0 };
     }
 
-    return ctx.jellyfin.listLibrary(userContext, {
+    const result = await ctx.jellyfin.listLibrary(userContext, {
       mediaType: params.mediaType,
       startIndex: query.startIndex,
       limit: query.limit ?? 48,
       search: query.search,
       sortBy: query.sortBy,
     });
+    return {
+      ...result,
+      items: await applyTmdbArtwork(ctx, result.items, userContext),
+    };
   });
 }
