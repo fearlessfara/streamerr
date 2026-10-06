@@ -13,6 +13,8 @@ coverage
 .env
 .env.*
 !.env.example
+.npmrc
+.netrc
 
 data
 **/data
