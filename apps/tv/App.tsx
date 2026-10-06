@@ -1,5 +1,4 @@
 import { type JSX, useEffect } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { NavigationContainer, useNavigation } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
@@ -8,6 +7,7 @@ import { StatusBar } from "expo-status-bar";
 import type { Nav, RootStackParamList } from "./src/nav";
 import { attachClient, loadServerUrl } from "./src/session";
 import { colors } from "./src/theme";
+import { BootSkeleton } from "./src/components/Skeleton";
 import { ServerScreen } from "./src/screens/ServerScreen";
 import { LoginScreen } from "./src/screens/LoginScreen";
 import { HomeScreen } from "./src/screens/HomeScreen";
@@ -25,11 +25,7 @@ const queryClient = new QueryClient({
 });
 
 function Loading() {
-  return (
-    <View style={styles.boot}>
-      <ActivityIndicator color={colors.text} size="large" />
-    </View>
-  );
+  return <BootSkeleton />;
 }
 
 function BootScreen() {
@@ -106,7 +102,3 @@ export function App() {
     </QueryClientProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  boot: { flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center" },
-});

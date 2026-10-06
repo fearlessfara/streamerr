@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigation } from "@react-navigation/native";
 import type { LiveChannel, LiveNowNext } from "@streamerr/shared";
@@ -12,6 +12,7 @@ import {
 } from "@streamerr/client";
 import { Chrome } from "../components/Chrome";
 import { Focusable } from "../components/Focusable";
+import { ChannelListSkeleton } from "../components/Skeleton";
 import { TvTextInput } from "../components/TvTextInput";
 import { isTvFocused } from "../focus";
 import { colors } from "../theme";
@@ -121,7 +122,7 @@ export function LiveScreen({ username }: { username: string }) {
           placeholder="Search channels…"
           placeholderTextColor={colors.muted}
         />
-        {channels.isLoading ? <ActivityIndicator color={colors.text} /> : null}
+        {channels.isLoading ? <ChannelListSkeleton rows={8} /> : null}
         <FlatList
           data={channels.data?.items ?? []}
           keyExtractor={(item) => item.uuid}

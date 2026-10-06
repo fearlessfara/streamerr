@@ -1,8 +1,9 @@
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigation } from "@react-navigation/native";
 import { listRequests } from "@streamerr/client";
 import { ScreenHeader } from "../components/ScreenHeader";
+import { ListSkeleton } from "../components/Skeleton";
 import { colors } from "../theme";
 import type { Nav } from "../nav";
 
@@ -17,7 +18,7 @@ export function RequestsScreen({ username }: { username: string }) {
     <View style={styles.page}>
       <ScreenHeader username={username} title="Requests" showBack />
       <View style={styles.body}>
-        {query.isLoading ? <ActivityIndicator color={colors.text} /> : null}
+        {query.isLoading ? <ListSkeleton rows={6} /> : null}
         {(query.data?.items ?? []).length === 0 && !query.isLoading ? (
           <Text style={styles.empty}>No requests yet.</Text>
         ) : null}

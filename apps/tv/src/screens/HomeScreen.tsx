@@ -1,6 +1,5 @@
 import { useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   ScrollView,
   StyleSheet,
@@ -17,6 +16,7 @@ import { Artwork } from "../artwork";
 import { Chrome } from "../components/Chrome";
 import { Focusable } from "../components/Focusable";
 import { PosterCard } from "../components/PosterCard";
+import { HomeSkeleton } from "../components/Skeleton";
 import { openMedia } from "../media-nav";
 import { useTvLayout } from "../layout";
 import { colors } from "../theme";
@@ -93,7 +93,7 @@ export function HomeScreen({ username }: { username: string }) {
         onScroll={onScroll}
         scrollEventThrottle={16}
       >
-        {homeQuery.isLoading ? <ActivityIndicator color={colors.text} /> : null}
+        {homeQuery.isLoading ? <HomeSkeleton /> : null}
         {featured ? (
           <View style={[styles.hero, { height: layout.heroH, marginBottom: layout.railGap }]}>
             <Artwork url={featured.metadata.backdropUrl} maxWidth={1280} style={styles.heroImage} />

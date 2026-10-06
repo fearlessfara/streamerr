@@ -1,8 +1,9 @@
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigation } from "@react-navigation/native";
 import { listRequests } from "@streamerr/client";
 import { Chrome } from "../components/Chrome";
+import { ListSkeleton } from "../components/Skeleton";
 import { isTvFocused } from "../focus";
 import { colors } from "../theme";
 import type { Nav } from "../nav";
@@ -18,7 +19,7 @@ export function RequestsScreen({ username }: { username: string }) {
     <Chrome username={username}>
       <View style={styles.page}>
         <Text style={styles.h1}>Requests</Text>
-        {query.isLoading ? <ActivityIndicator color={colors.text} /> : null}
+        {query.isLoading ? <ListSkeleton rows={6} /> : null}
         {(query.data?.items ?? []).length === 0 && !query.isLoading ? (
           <Text style={styles.empty}>No requests yet.</Text>
         ) : null}

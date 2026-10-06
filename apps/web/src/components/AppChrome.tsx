@@ -239,10 +239,19 @@ export function AppChrome({
               >
                 {searchValue.trim().length < 2 ? (
                   <div className="header-search-panel-status">Type at least 2 characters…</div>
-                ) : searchValue.trim() !== debouncedQ ? (
-                  <div className="header-search-panel-status">Searching…</div>
-                ) : liveSearch.isFetching && !liveSearch.data ? (
-                  <div className="header-search-panel-status">Searching…</div>
+                ) : searchValue.trim() !== debouncedQ ||
+                  (liveSearch.isFetching && !liveSearch.data) ? (
+                  <ul className="header-search-skeleton" aria-label="Searching">
+                    {Array.from({ length: 5 }, (_, i) => (
+                      <li key={i} className="header-search-skeleton-row" aria-hidden="true">
+                        <div className="sk-block sk-header-search-poster" />
+                        <div className="header-search-skeleton-meta">
+                          <div className="sk-block sk-header-search-title" />
+                          <div className="sk-block sk-header-search-sub" />
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
                 ) : liveSearch.isError ? (
                   <div className="header-search-panel-status is-error">
                     {(liveSearch.error as Error).message}

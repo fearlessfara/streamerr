@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { EpisodeListItem } from "@streamerr/shared";
@@ -19,6 +19,7 @@ import {
 import { Artwork } from "../artwork";
 import { Chrome } from "../components/Chrome";
 import { Focusable } from "../components/Focusable";
+import { DetailsSkeleton } from "../components/Skeleton";
 import { isTvFocused } from "../focus";
 import { colors } from "../theme";
 import type { Nav, RootStackParamList } from "../nav";
@@ -131,7 +132,7 @@ export function DetailsScreen({ username }: { username: string }) {
   return (
     <Chrome username={username}>
       <ScrollView contentContainerStyle={styles.content}>
-        {details.isLoading ? <ActivityIndicator color={colors.text} /> : null}
+        {details.isLoading ? <DetailsSkeleton /> : null}
         {details.isError ? <Text style={styles.error}>{(details.error as Error).message}</Text> : null}
         {media ? (
           <>

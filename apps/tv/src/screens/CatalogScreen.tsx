@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   ScrollView,
   StyleSheet,
@@ -15,6 +14,7 @@ import { catalogRails } from "@streamerr/client";
 import { Chrome } from "../components/Chrome";
 import { TvTextInput } from "../components/TvTextInput";
 import { PosterCard } from "../components/PosterCard";
+import { RailSkeleton } from "../components/Skeleton";
 import { openMedia } from "../media-nav";
 import { useTvLayout } from "../layout";
 import { colors } from "../theme";
@@ -79,7 +79,11 @@ export function CatalogScreen({
           placeholder="Filter library…"
           placeholderTextColor={colors.muted}
         />
-        {catalog.isLoading ? <ActivityIndicator color={colors.text} /> : null}
+        {catalog.isLoading ? (
+          <View style={{ marginHorizontal: -layout.pageX }}>
+            <RailSkeleton rails={2} cards={6} />
+          </View>
+        ) : null}
         {catalog.isError ? <Text style={styles.error}>{(catalog.error as Error).message}</Text> : null}
         {rows.map((row, rowIndex) => (
           <View

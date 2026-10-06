@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { listRequests } from "@streamerr/client";
 import { AppChrome } from "../components/AppChrome";
+import { ListSkeleton } from "../components/skeletons";
 
 export function RequestsPage({ username }: { username: string }) {
   const query = useQuery({
@@ -19,7 +20,11 @@ export function RequestsPage({ username }: { username: string }) {
           <p>Seerr request status for titles you&apos;ve asked for.</p>
         </div>
 
-        {query.isLoading ? <div className="page-status">Loading…</div> : null}
+        {query.isLoading ? (
+          <div className="catalog-body">
+            <ListSkeleton rows={6} variant="poster" />
+          </div>
+        ) : null}
         {query.isError ? (
           <div className="page-status error">{(query.error as Error).message}</div>
         ) : null}

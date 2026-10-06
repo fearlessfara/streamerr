@@ -16,6 +16,7 @@ import {
 } from "@streamerr/client";
 import { actionLabel, formatRuntime } from "@streamerr/client";
 import { AppChrome } from "../components/AppChrome";
+import { DetailsSkeleton, EpisodeListSkeleton } from "../components/skeletons";
 
 function formatMb(bytes?: number): string {
   if (bytes === undefined || bytes < 0) return "0";
@@ -220,11 +221,7 @@ export function DetailsPage({ username }: { username: string }) {
 
         <main className="details-layout">
           <div className="details-body">
-            {details.isLoading ? (
-              <p className="empty-rail" style={{ padding: 0 }}>
-                Loading…
-              </p>
-            ) : null}
+            {details.isLoading ? <DetailsSkeleton showEpisodes={tmdbType === "tv"} /> : null}
             {details.isError ? <p className="error">{(details.error as Error).message}</p> : null}
             {media ? (
               <>
@@ -356,9 +353,7 @@ export function DetailsPage({ username }: { username: string }) {
                         </div>
                       ) : null}
                     </div>
-                    {episodesQuery.isLoading ? (
-                      <p className="details-status">Loading episodes…</p>
-                    ) : null}
+                    {episodesQuery.isLoading ? <EpisodeListSkeleton /> : null}
                     {episodesQuery.isError ? (
                       <p className="error">{(episodesQuery.error as Error).message}</p>
                     ) : null}

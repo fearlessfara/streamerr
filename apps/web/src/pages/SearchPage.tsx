@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { searchMedia } from "@streamerr/client";
 import { AppChrome } from "../components/AppChrome";
-import { CatalogSkeleton } from "../components/CatalogSkeleton";
+import { CatalogSkeleton } from "../components/skeletons";
 import { MediaGrid } from "../components/MediaGrid";
 
 export function SearchPage({ username }: { username: string }) {
@@ -22,6 +22,8 @@ export function SearchPage({ username }: { username: string }) {
     enabled: q.length >= 2,
   });
 
+  const showSkeleton = q.length >= 2 && query.isPending && !query.data;
+
   return (
     <AppChrome username={username} solid>
       <main className="app-main catalog-page">
@@ -37,7 +39,7 @@ export function SearchPage({ username }: { username: string }) {
             </p>
           )}
         </div>
-        {query.isFetching ? (
+        {showSkeleton ? (
           <div className="catalog-body">
             <CatalogSkeleton cards={12} />
           </div>
@@ -45,7 +47,7 @@ export function SearchPage({ username }: { username: string }) {
         {query.isError ? (
           <div className="page-status error">{(query.error as Error).message}</div>
         ) : null}
-        {query.data && !query.isFetching ? (
+        {query.data ? (
           <div className="catalog-body">
             <MediaGrid
               id="search"

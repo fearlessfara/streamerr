@@ -7,6 +7,7 @@ import { home, resolvePlaybackForPlay } from "@streamerr/client";
 import { actionLabel, canPlayMedia, formatRuntime, mediaHref } from "@streamerr/client";
 import { AppChrome } from "../components/AppChrome";
 import { MediaRailSection } from "../components/MediaRailSection";
+import { HomeSkeleton } from "../components/skeletons";
 
 export function HomePage({ username }: { username: string }) {
   const navigate = useNavigate();
@@ -74,18 +75,14 @@ export function HomePage({ username }: { username: string }) {
   return (
     <AppChrome username={username}>
       <main className="app-main with-billboard">
-        {homeQuery.isLoading ? (
-          <div className="page-status" role="status">
-            Loading your library…
-          </div>
-        ) : null}
+        {homeQuery.isLoading ? <HomeSkeleton /> : null}
         {homeQuery.isError ? (
           <div className="page-status error" role="alert">
             {(homeQuery.error as Error).message}
           </div>
         ) : null}
 
-        {featured ? (
+        {!homeQuery.isLoading && featured ? (
           <section className="billboard" aria-label="Featured">
             <div
               className="billboard-bg"

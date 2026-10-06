@@ -1,9 +1,10 @@
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigation } from "@react-navigation/native";
 import { cancelAcquisition, formatCacheTtlRemaining, listAcquisitions, promoteAcquisition } from "@streamerr/client";
 import { Chrome } from "../components/Chrome";
 import { Focusable } from "../components/Focusable";
+import { ListSkeleton } from "../components/Skeleton";
 import { isTvFocused } from "../focus";
 import { colors } from "../theme";
 import type { Nav } from "../nav";
@@ -34,7 +35,7 @@ export function DownloadsScreen({ username }: { username: string }) {
     <Chrome username={username}>
       <View style={styles.page}>
         <Text style={styles.h1}>Downloads</Text>
-        {query.isLoading ? <ActivityIndicator color={colors.text} /> : null}
+        {query.isLoading ? <ListSkeleton rows={5} /> : null}
         {(query.data?.items ?? []).length === 0 && !query.isLoading ? (
           <Text style={styles.empty}>No downloads yet.</Text>
         ) : null}

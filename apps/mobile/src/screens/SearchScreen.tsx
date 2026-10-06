@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { ActivityIndicator, FlatList, StyleSheet, Text, TextInput, View } from "react-native";
+import { FlatList, StyleSheet, Text, TextInput, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigation } from "@react-navigation/native";
 import { searchMedia } from "@streamerr/client";
 import { PosterCard } from "../components/PosterCard";
 import { ScreenHeader } from "../components/ScreenHeader";
+import { CatalogSkeleton } from "../components/Skeleton";
 import { openMedia } from "../media-nav";
 import { useMobileLayout } from "../layout";
 import { colors } from "../theme";
@@ -34,7 +35,11 @@ export function SearchScreen({ username }: { username: string }) {
           autoCorrect={false}
           autoFocus
         />
-        {query.isFetching ? <ActivityIndicator color={colors.text} style={{ marginBottom: 12 }} /> : null}
+        {q.trim().length >= 2 && query.isPending && !query.data ? (
+          <View style={{ marginHorizontal: -layout.pageX }}>
+            <CatalogSkeleton cards={layout.gridColumns * 3} />
+          </View>
+        ) : null}
         {query.data ? (
           <FlatList
             data={query.data.items}
@@ -50,9 +55,9 @@ export function SearchScreen({ username }: { username: string }) {
               </View>
             )}
           />
-        ) : (
+        ) : q.trim().length < 2 ? (
           <Text style={styles.empty}>Type at least 2 characters.</Text>
-        )}
+        ) : null}
       </View>
     </View>
   );

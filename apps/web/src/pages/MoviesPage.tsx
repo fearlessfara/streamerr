@@ -2,8 +2,8 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { catalogRails } from "@streamerr/client";
 import { AppChrome } from "../components/AppChrome";
-import { CatalogSkeleton } from "../components/CatalogSkeleton";
 import { MediaRailSection } from "../components/MediaRailSection";
+import { RailSkeleton } from "../components/skeletons";
 
 export function MoviesPage({ username }: { username: string }) {
   const [search, setSearch] = useState("");
@@ -32,11 +32,7 @@ export function MoviesPage({ username }: { username: string }) {
           </label>
         </div>
 
-        {catalog.isLoading ? (
-          <div className="catalog-body">
-            <CatalogSkeleton cards={8} />
-          </div>
-        ) : null}
+        {catalog.isLoading ? <RailSkeleton rails={2} cards={7} /> : null}
 
         {catalog.isError ? (
           <div className="page-status error" role="alert">

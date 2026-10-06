@@ -1,9 +1,2 @@
-export function CatalogSkeleton({ cards = 8 }: { cards?: number }) {
-  return (
-    <div className="catalog-skeleton" aria-hidden="true">
-      {Array.from({ length: cards }, (_, i) => (
-        <div key={i} className="catalog-skeleton-card" />
-      ))}
-    </div>
-  );
-}
+/** @deprecated Prefer importing from `./skeletons` — kept for existing imports. */
+export { CatalogSkeleton } from "./skeletons";

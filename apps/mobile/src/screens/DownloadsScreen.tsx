@@ -1,9 +1,10 @@
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigation } from "@react-navigation/native";
 import { cancelAcquisition, formatCacheTtlRemaining, listAcquisitions, promoteAcquisition } from "@streamerr/client";
 import { Button } from "../components/Button";
 import { ScreenHeader } from "../components/ScreenHeader";
+import { ListSkeleton } from "../components/Skeleton";
 import { colors } from "../theme";
 import type { Nav } from "../nav";
 
@@ -33,7 +34,7 @@ export function DownloadsScreen({ username }: { username: string }) {
     <View style={styles.page}>
       <ScreenHeader username={username} title="Downloads" showBack />
       <View style={styles.body}>
-        {query.isLoading ? <ActivityIndicator color={colors.text} /> : null}
+        {query.isLoading ? <ListSkeleton rows={5} /> : null}
         {(query.data?.items ?? []).length === 0 && !query.isLoading ? (
           <Text style={styles.empty}>No downloads yet.</Text>
         ) : null}

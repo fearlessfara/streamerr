@@ -8,6 +8,7 @@ import {
   promoteAcquisition,
 } from "@streamerr/client";
 import { AppChrome } from "../components/AppChrome";
+import { ListSkeleton } from "../components/skeletons";
 
 function formatMb(bytes?: number): string {
   if (bytes === undefined || bytes < 0) return "0";
@@ -63,7 +64,11 @@ export function DownloadsPage({ username }: { username: string }) {
           <p>IPTV cache and library acquisitions. Promote finished caches into Jellyfin.</p>
         </div>
 
-        {query.isLoading ? <div className="page-status">Loading…</div> : null}
+        {query.isLoading ? (
+          <div className="catalog-body">
+            <ListSkeleton rows={5} />
+          </div>
+        ) : null}
         {query.isError ? (
           <div className="page-status error">{(query.error as Error).message}</div>
         ) : null}

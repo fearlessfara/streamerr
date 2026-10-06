@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { ActivityIndicator, FlatList, StyleSheet, Text, View } from "react-native";
+import { FlatList, StyleSheet, Text, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigation } from "@react-navigation/native";
 import { searchMedia } from "@streamerr/client";
 import { Chrome } from "../components/Chrome";
 import { TvTextInput } from "../components/TvTextInput";
 import { PosterCard } from "../components/PosterCard";
+import { CatalogSkeleton } from "../components/Skeleton";
 import { openMedia } from "../media-nav";
 import { colors } from "../theme";
 import type { Nav } from "../nav";
@@ -31,7 +32,11 @@ export function SearchScreen({ username }: { username: string }) {
           placeholderTextColor={colors.muted}
           hasTVPreferredFocus
         />
-        {query.isFetching ? <ActivityIndicator color={colors.text} /> : null}
+        {q.trim().length >= 2 && query.isPending && !query.data ? (
+          <View style={{ marginHorizontal: -48 }}>
+            <CatalogSkeleton cards={12} />
+          </View>
+        ) : null}
         {query.data ? (
           <FlatList
             removeClippedSubviews={false}
@@ -43,9 +48,9 @@ export function SearchScreen({ username }: { username: string }) {
               <PosterCard media={item} onPress={() => openMedia(navigation, item)} />
             )}
           />
-        ) : (
+        ) : q.trim().length < 2 ? (
           <Text style={styles.empty}>Type at least 2 characters.</Text>
-        )}
+        ) : null}
       </View>
     </Chrome>
   );

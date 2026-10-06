@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   Platform,
   Pressable,
@@ -21,6 +20,7 @@ import {
 } from "@streamerr/client";
 import { Button } from "../components/Button";
 import { ScreenHeader } from "../components/ScreenHeader";
+import { ChannelListSkeleton } from "../components/Skeleton";
 import { colors } from "../theme";
 import type { Nav } from "../nav";
 
@@ -146,7 +146,7 @@ export function LiveScreen({ username }: { username: string }) {
           autoCapitalize="none"
           autoCorrect={false}
         />
-        {channels.isLoading ? <ActivityIndicator color={colors.text} /> : null}
+        {channels.isLoading ? <ChannelListSkeleton rows={8} /> : null}
         {playMutation.isError ? (
           <Text style={styles.error}>{(playMutation.error as Error).message}</Text>
         ) : null}

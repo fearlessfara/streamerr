@@ -1,18 +1,11 @@
 import { useState } from "react";
-import {
-  ActivityIndicator,
-  FlatList,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { FlatList, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigation } from "@react-navigation/native";
 import { catalogRails } from "@streamerr/client";
 import { PosterCard } from "../components/PosterCard";
 import { ScreenHeader } from "../components/ScreenHeader";
+import { RailSkeleton } from "../components/Skeleton";
 import { openMedia } from "../media-nav";
 import { useMobileLayout } from "../layout";
 import { colors } from "../theme";
@@ -54,7 +47,11 @@ export function CatalogScreen({
           autoCapitalize="none"
           autoCorrect={false}
         />
-        {catalog.isLoading ? <ActivityIndicator color={colors.text} /> : null}
+        {catalog.isLoading ? (
+          <View style={{ marginHorizontal: -layout.pageX }}>
+            <RailSkeleton rails={2} cards={4} />
+          </View>
+        ) : null}
         {catalog.isError ? <Text style={styles.error}>{(catalog.error as Error).message}</Text> : null}
         {rows.map((row) => (
           <View key={row.id} style={{ marginBottom: layout.railGap }}>

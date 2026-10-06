@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { LiveChannel, LiveNowNext } from "@streamerr/shared";
 import { AppChrome } from "../components/AppChrome";
 import { LiveGuideGrid } from "../components/LiveGuideGrid";
+import { LiveSkeleton } from "../components/skeletons";
 import {
   liveChannels,
   liveGuide,
@@ -215,7 +216,7 @@ export function LiveTvPage({ username }: { username: string }) {
                 aria-label="Search channels"
               />
               <span className="live-count">
-                {channels.data ? `${channels.data.total} channels` : "Loading…"}
+                {channels.data ? `${channels.data.total} channels` : "…"}
               </span>
               {view === "guide" ? (
                 <div className="live-guide-nav">
@@ -241,7 +242,7 @@ export function LiveTvPage({ username }: { username: string }) {
 
             {view === "guide" ? (
               guide.isLoading ? (
-                <p className="page-status">Loading guide…</p>
+                <LiveSkeleton mode="guide" />
               ) : (
                 <LiveGuideGrid
                   channels={channels.data?.items ?? []}
@@ -316,7 +317,7 @@ export function LiveTvPage({ username }: { username: string }) {
                     </div>
                   );
                 })}
-                {channels.isLoading ? <p className="page-status">Loading channels…</p> : null}
+                {channels.isLoading ? <LiveSkeleton mode="channels" /> : null}
                 {!channels.isLoading && (channels.data?.items.length ?? 0) === 0 ? (
                   <p className="page-status">No channels in this group.</p>
                 ) : null}

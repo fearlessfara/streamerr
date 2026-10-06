@@ -1,13 +1,5 @@
 import { useMemo, useState } from "react";
-import {
-  ActivityIndicator,
-  FlatList,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigation } from "@react-navigation/native";
 import type { Media } from "@streamerr/shared";
@@ -16,6 +8,7 @@ import { Artwork } from "../artwork";
 import { Button } from "../components/Button";
 import { PosterCard } from "../components/PosterCard";
 import { ScreenHeader } from "../components/ScreenHeader";
+import { HomeSkeleton } from "../components/Skeleton";
 import { openMedia } from "../media-nav";
 import { useMobileLayout } from "../layout";
 import { colors } from "../theme";
@@ -64,7 +57,7 @@ export function HomeScreen({ username }: { username: string }) {
     <View style={styles.page}>
       <ScreenHeader username={username} />
       <ScrollView style={styles.body} contentContainerStyle={styles.content}>
-        {homeQuery.isLoading ? <ActivityIndicator color={colors.text} /> : null}
+        {homeQuery.isLoading ? <HomeSkeleton /> : null}
         {featured ? (
           <View style={[styles.hero, { height: layout.heroH, marginBottom: layout.railGap }]}>
             <Artwork url={featured.metadata.backdropUrl} maxWidth={1280} style={styles.heroImage} />

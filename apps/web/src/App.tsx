@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { me } from "@streamerr/client";
+import { BootSkeleton } from "./components/skeletons";
 import { LoginPage } from "./pages/LoginPage";
 import { HomePage } from "./pages/HomePage";
 import { DetailsPage } from "./pages/DetailsPage";
@@ -20,11 +21,7 @@ export function App() {
   });
 
   if (session.isLoading) {
-    return (
-      <div className="login-page">
-        <p className="tagline">Loading Streamerr…</p>
-      </div>
-    );
+    return <BootSkeleton />;
   }
 
   const authed = Boolean(session.data?.user);

@@ -1,5 +1,5 @@
 import { type JSX, useEffect } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { NavigationContainer, useNavigation } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
@@ -21,6 +21,7 @@ import { DownloadsScreen } from "./src/screens/DownloadsScreen";
 import { RequestsScreen } from "./src/screens/RequestsScreen";
 import { ProfileScreen } from "./src/screens/ProfileScreen";
 import { PlayerScreen } from "./src/screens/PlayerScreen";
+import { BootSkeleton } from "./src/components/Skeleton";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -29,11 +30,7 @@ const queryClient = new QueryClient({
 });
 
 function Loading() {
-  return (
-    <View style={styles.boot}>
-      <ActivityIndicator color={colors.text} size="large" />
-    </View>
-  );
+  return <BootSkeleton />;
 }
 
 function BootScreen() {
@@ -174,7 +171,6 @@ export function App() {
 }
 
 const styles = StyleSheet.create({
-  boot: { flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center" },
   tabBar: {
     backgroundColor: colors.bg1,
     borderTopColor: colors.bg2,
