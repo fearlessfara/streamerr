@@ -1,4 +1,4 @@
-/** Page-shaped loading placeholders. Swap only UI — keep query gates as-is. */
+/** Page-shaped loading placeholders matching real Streamerr/Netflix layout geometry. */
 
 function times(n: number): number[] {
   return Array.from({ length: n }, (_, i) => i);
@@ -16,11 +16,11 @@ export function CatalogSkeleton({ cards = 8 }: { cards?: number }) {
 
 export function RailSkeleton({ rails = 3, cards = 6 }: { rails?: number; cards?: number }) {
   return (
-    <div className="rails rail-skeleton-stack" role="status" aria-label="Loading">
+    <div className="rails" role="status" aria-label="Loading">
       {times(rails).map((rail) => (
-        <section key={rail} className="rail-skeleton" aria-hidden="true">
+        <section key={rail} className="se-rail" aria-hidden="true">
           <div className="sk-block sk-rail-title" />
-          <div className="rail-skeleton-cards">
+          <div className="se-rail-row rail-skeleton-row">
             {times(cards).map((card) => (
               <div key={card} className="sk-block sk-rail-card" />
             ))}
@@ -34,12 +34,16 @@ export function RailSkeleton({ rails = 3, cards = 6 }: { rails?: number; cards?:
 export function HomeSkeleton() {
   return (
     <div className="home-skeleton" role="status" aria-label="Loading">
-      <section className="billboard home-skeleton-billboard" aria-hidden="true">
+      <section className="billboard" aria-hidden="true">
         <div className="billboard-bg home-skeleton-billboard-bg" />
         <div className="billboard-shade" />
         <div className="billboard-content">
           <div className="sk-block sk-billboard-title" />
-          <div className="sk-block sk-billboard-meta" />
+          <div className="sk-meta-chips" aria-hidden="true">
+            <div className="sk-block sk-chip" />
+            <div className="sk-block sk-chip sk-chip-sm" />
+            <div className="sk-block sk-chip sk-chip-sm" />
+          </div>
           <div className="sk-block sk-billboard-overview" />
           <div className="billboard-actions">
             <div className="sk-block sk-btn" />
@@ -56,7 +60,12 @@ export function DetailsSkeleton({ showEpisodes = false }: { showEpisodes?: boole
   return (
     <div className="details-skeleton" role="status" aria-label="Loading">
       <div className="sk-block sk-details-title" aria-hidden="true" />
-      <div className="sk-block sk-details-meta" aria-hidden="true" />
+      <div className="sk-meta-chips" aria-hidden="true">
+        <div className="sk-block sk-chip" />
+        <div className="sk-block sk-chip sk-chip-sm" />
+        <div className="sk-block sk-chip" />
+      </div>
+      <div className="sk-block sk-details-overview" aria-hidden="true" />
       <div className="sk-block sk-details-overview" aria-hidden="true" />
       <div className="sk-block sk-details-overview sk-details-overview-short" aria-hidden="true" />
       <div className="details-actions" aria-hidden="true">
@@ -65,6 +74,21 @@ export function DetailsSkeleton({ showEpisodes = false }: { showEpisodes?: boole
       </div>
       {showEpisodes ? <EpisodeListSkeleton /> : null}
     </div>
+  );
+}
+
+export function DetailsAsideSkeleton() {
+  return (
+    <aside className="details-aside details-skeleton-aside" aria-hidden="true">
+      <div className="details-facts">
+        {times(4).map((i) => (
+          <div key={i}>
+            <div className="sk-block sk-fact-label" />
+            <div className={`sk-block sk-fact-value${i === 3 ? " sk-fact-short" : ""}`} />
+          </div>
+        ))}
+      </div>
+    </aside>
   );
 }
 
@@ -91,7 +115,11 @@ export function ListSkeleton({ rows = 6, variant = "row" }: { rows?: number; var
   return (
     <ul className="list-skeleton" role="status" aria-label="Loading">
       {times(rows).map((i) => (
-        <li key={i} className={`list-skeleton-row${variant === "poster" ? " has-poster" : ""}`} aria-hidden="true">
+        <li
+          key={i}
+          className={`list-skeleton-row${variant === "poster" ? " has-poster" : ""}`}
+          aria-hidden="true"
+        >
           {variant === "poster" ? <div className="sk-block sk-list-poster" /> : null}
           <div className="list-skeleton-meta">
             <div className="sk-block sk-list-title" />

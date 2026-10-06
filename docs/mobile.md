@@ -3,14 +3,15 @@
 Phase 9 is a React Native app in [`apps/mobile`](../apps/mobile) that shares [`@streamerr/client`](../packages/client) with the website and Android TV app. Screens are touch-first (bottom tabs). Playback uses `react-native-video` (ExoPlayer on Android, AVPlayer on iOS).
 
 ```text
-apps/web    (React DOM)
+apps/web    (React DOM + @streamerr/ui)
 apps/tv     (React Native + Expo TV / Leanback)
 apps/mobile (React Native + Expo / phones & tablets)
         │
-        └── @streamerr/client → Streamerr API
+        ├── @streamerr/client → Streamerr API
+        └── @streamerr/native-ui (shared RN primitives; see native-unification.md)
 ```
 
-The website stays Vite + CSS. The TV app stays D-pad / landscape Leanback. Mobile does **not** import TV components and does **not** set `EXPO_TV`.
+The website stays Vite + CSS for now (RN-web is a later phase — see [native-unification.md](./native-unification.md)). The TV app stays D-pad / landscape Leanback. Mobile does **not** import TV chrome components and does **not** set `EXPO_TV`.
 
 ## Runtime
 

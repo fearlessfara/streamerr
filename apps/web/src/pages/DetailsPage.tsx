@@ -16,7 +16,11 @@ import {
 } from "@streamerr/client";
 import { actionLabel, formatRuntime } from "@streamerr/client";
 import { AppChrome } from "../components/AppChrome";
-import { DetailsSkeleton, EpisodeListSkeleton } from "../components/skeletons";
+import {
+  DetailsAsideSkeleton,
+  DetailsSkeleton,
+  EpisodeListSkeleton,
+} from "../components/skeletons";
 
 function formatMb(bytes?: number): string {
   if (bytes === undefined || bytes < 0) return "0";
@@ -216,7 +220,7 @@ export function DetailsPage({ username }: { username: string }) {
         {bg ? (
           <div className="details-backdrop" style={{ backgroundImage: `url(${bg})` }} />
         ) : (
-          <div className="details-backdrop" />
+          <div className={`details-backdrop${details.isLoading ? " is-skeleton" : ""}`} />
         )}
 
         <main className="details-layout">
@@ -418,6 +422,7 @@ export function DetailsPage({ username }: { username: string }) {
             ) : null}
           </div>
 
+          {details.isLoading ? <DetailsAsideSkeleton /> : null}
           {media ? (
             <aside className="details-aside">
               <dl className="details-facts">

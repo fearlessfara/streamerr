@@ -17,6 +17,7 @@
     "@react-navigation/native": "^7.1.17",
     "@react-navigation/native-stack": "^7.3.26",
     "@streamerr/client": "*",
+    "@streamerr/native-ui": "*",
     "@streamerr/shared": "*",
     "@tanstack/react-query": "^5.67.2",
     "expo": "~57.0.13",

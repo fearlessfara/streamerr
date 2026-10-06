@@ -1457,12 +1457,19 @@ button.player-live-badge:hover {
   width: 100%;
 }
 
-/* —— Skeletons —— */
+/* —— Skeletons (match real billboard / rail / details geometry) —— */
 .sk-block {
   border-radius: 4px;
-  background: linear-gradient(90deg, #1f1f1f 0%, #2a2a2a 45%, #1f1f1f 100%);
+  background: linear-gradient(
+    100deg,
+    #1a1a1a 0%,
+    #1a1a1a 40%,
+    #2c2c2c 50%,
+    #1a1a1a 60%,
+    #1a1a1a 100%
+  );
   background-size: 200% 100%;
-  animation: skeleton-shine 1.2s ease-in-out infinite;
+  animation: skeleton-shine 1.4s linear infinite;
 }
 
 @keyframes skeleton-shine {
@@ -1484,6 +1491,7 @@ button.player-live-badge:hover {
 .sk-rail-card {
   aspect-ratio: 16 / 9;
   border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
 .sk-rail-card {
@@ -1491,61 +1499,86 @@ button.player-live-badge:hover {
   flex: 0 0 auto;
 }
 
-.rail-skeleton {
-  padding: 0 var(--se-page-x) var(--se-rail-rest-pad);
-}
-
-.rail-skeleton-stack {
-  padding-top: 0.5rem;
+/* Reuse .se-rail / .se-rail-row — only hide scroll chrome while loading */
+.rail-skeleton-row {
+  overflow: hidden;
+  pointer-events: none;
+  scrollbar-width: none;
 }
 
 .sk-rail-title {
-  width: min(12rem, 40%);
-  height: 1.35rem;
-  margin-bottom: 0.85rem;
-}
-
-.rail-skeleton-cards {
-  display: flex;
-  gap: var(--se-rail-gap);
-  overflow: hidden;
-  padding-top: var(--se-rail-pad-top);
-}
-
-.home-skeleton-billboard {
-  min-height: clamp(280px, 52vh, 560px);
+  width: min(14rem, 45%);
+  height: 1.25rem;
+  margin: 0 0 0.5rem;
+  margin-inline: var(--se-page-x);
 }
 
 .home-skeleton-billboard-bg {
-  background: linear-gradient(135deg, #2a0a0c, #141414 60%);
+  background:
+    radial-gradient(ellipse 70% 60% at 70% 30%, #3a1216 0%, transparent 55%),
+    linear-gradient(135deg, #1c0a0c, #141414 55%);
 }
 
 .sk-billboard-title {
-  width: min(28rem, 70%);
-  height: clamp(2.2rem, 5vw, 3.4rem);
-  margin-bottom: 0.85rem;
+  width: min(28rem, 85%);
+  height: clamp(2.4rem, 6vw, 4rem);
+  margin-bottom: 0.65rem;
 }
 
-.sk-billboard-meta {
-  width: min(14rem, 45%);
-  height: 1.1rem;
-  margin-bottom: 1rem;
+.sk-meta-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0 0 0.85rem;
+}
+
+.sk-chip {
+  width: 3.5rem;
+  height: 1.35rem;
+  border-radius: 3px;
+}
+
+.sk-chip-sm {
+  width: 2.6rem;
 }
 
 .sk-billboard-overview {
-  width: min(36rem, 90%);
-  height: 3.6rem;
+  width: min(36rem, 92%);
+  height: calc(1.05rem * 1.45 * 3);
   margin-bottom: 1.25rem;
 }
 
 .sk-btn {
   width: 7.5rem;
-  height: 2.6rem;
+  min-height: 42px;
+  height: 42px;
   border-radius: 4px;
 }
 
 .sk-btn-wide {
   width: 9.5rem;
+}
+
+.details-backdrop.is-skeleton {
+  background-image: none;
+  background-color: #1a1a1a;
+}
+
+.details-backdrop.is-skeleton::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    #1a1a1a 0%,
+    #1a1a1a 40%,
+    #2a2a2a 50%,
+    #1a1a1a 60%,
+    #1a1a1a 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shine 1.4s linear infinite;
+  opacity: 0.85;
 }
 
 .details-skeleton {
@@ -1554,25 +1587,36 @@ button.player-live-badge:hover {
 
 .sk-details-title {
   width: min(26rem, 85%);
-  height: 2.6rem;
-  margin-bottom: 0.9rem;
-}
-
-.sk-details-meta {
-  width: min(16rem, 55%);
-  height: 1.1rem;
-  margin-bottom: 1.1rem;
+  height: clamp(2.4rem, 6vw, 4rem);
+  margin-bottom: 0.75rem;
 }
 
 .sk-details-overview {
   width: 100%;
-  height: 1rem;
+  max-width: 560px;
+  height: 1.05rem;
   margin-bottom: 0.55rem;
 }
 
 .sk-details-overview-short {
   width: 72%;
-  margin-bottom: 1.4rem;
+  margin-bottom: 1.5rem;
+}
+
+.details-skeleton-aside .sk-fact-label {
+  width: 4.5rem;
+  height: 0.7rem;
+  margin-bottom: 0.4rem;
+}
+
+.details-skeleton-aside .sk-fact-value {
+  width: 70%;
+  height: 0.95rem;
+  margin-bottom: 0.85rem;
+}
+
+.details-skeleton-aside .sk-fact-short {
+  width: 45%;
 }
 
 .episode-skeleton {
@@ -1591,17 +1635,20 @@ button.player-live-badge:hover {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.25rem;
 }
 
 .episode-skeleton-row {
   display: flex;
   gap: 0.85rem;
   align-items: center;
+  padding: 0.7rem 0.85rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .sk-episode-thumb {
-  width: 140px;
+  width: 8.5rem;
   aspect-ratio: 16 / 9;
   flex: 0 0 auto;
 }

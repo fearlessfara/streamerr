@@ -12,6 +12,7 @@ config.resolver.nodeModulesPaths = [
 ];
 config.resolver.extraNodeModules = {
   "@streamerr/client": path.resolve(workspaceRoot, "packages/client"),
+  "@streamerr/native-ui": path.resolve(workspaceRoot, "packages/native-ui"),
   "@streamerr/shared": path.resolve(workspaceRoot, "packages/shared"),
   "react-native": path.resolve(projectRoot, "node_modules/react-native"),
 };
