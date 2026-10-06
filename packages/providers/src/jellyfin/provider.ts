@@ -293,8 +293,18 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
     });
   }
 
-  async openImage(userContext: UserContext, itemId: string, imageType: string): Promise<Response> {
-    const url = `${this.baseUrl}/Items/${encodeURIComponent(itemId)}/Images/${encodeURIComponent(imageType)}`;
+  async openImage(
+    userContext: UserContext,
+    itemId: string,
+    imageType: string,
+    resize?: { maxWidth?: number; maxHeight?: number; quality?: number },
+  ): Promise<Response> {
+    const params = new URLSearchParams();
+    if (resize?.maxWidth) params.set("maxWidth", String(resize.maxWidth));
+    if (resize?.maxHeight) params.set("maxHeight", String(resize.maxHeight));
+    if (resize?.quality) params.set("quality", String(resize.quality));
+    const query = params.toString();
+    const url = `${this.baseUrl}/Items/${encodeURIComponent(itemId)}/Images/${encodeURIComponent(imageType)}${query ? `?${query}` : ""}`;
     const res = await (this.fetchImpl ?? fetch)(url, {
       headers: {
         Authorization: mediaBrowserAuth({

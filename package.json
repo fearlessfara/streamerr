@@ -12,10 +12,14 @@
     "dev": "npm run dev:api & npm run dev:web",
     "dev:api": "npm run dev -w @streamerr/api",
     "dev:web": "npm run dev -w @streamerr/web",
-    "build": "npm run build -w @streamerr/shared && npm run build -w @streamerr/providers && npm run build -w @streamerr/ui && npm run build -w @streamerr/api && npm run build -w @streamerr/web",
+    "dev:tv": "npm run start -w @streamerr/tv",
+    "build": "npm run build -w @streamerr/shared && npm run build -w @streamerr/client && npm run build -w @streamerr/providers && npm run build -w @streamerr/ui && npm run build -w @streamerr/api && npm run build -w @streamerr/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present"
+  },
+  "overrides": {
+    "react-native": "npm:react-native-tvos@0.86.3-0"
   },
   "engines": {
     "node": ">=24"

@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.js";
-import { SESSION_COOKIE, type SessionRecord } from "../services/session.js";
+import { SESSION_COOKIE, SESSION_HEADER, type SessionRecord } from "../services/session.js";
 import type { UserContext } from "@streamerr/providers";
 
 declare module "fastify" {
@@ -8,6 +8,18 @@ declare module "fastify" {
     session?: SessionRecord;
     userContext?: UserContext;
   }
+}
+
+function sessionIdFromRequest(req: FastifyRequest): string | undefined {
+  const fromCookie = req.cookies[SESSION_COOKIE];
+  if (fromCookie) return fromCookie;
+  const header = req.headers[SESSION_HEADER];
+  const fromHeader = Array.isArray(header) ? header[0] : header;
+  if (fromHeader?.trim()) return fromHeader.trim();
+  const raw = req.headers.cookie;
+  if (!raw) return undefined;
+  const part = raw.split(";").map((s) => s.trim()).find((s) => s.startsWith(`${SESSION_COOKIE}=`));
+  return part?.slice(SESSION_COOKIE.length + 1) || undefined;
 }
 
 function toUserContext(session: SessionRecord): UserContext {
@@ -24,7 +36,7 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext): Promi
   app.decorateRequest("userContext", undefined);
 
   app.addHook("preHandler", async (req) => {
-    const sid = req.cookies[SESSION_COOKIE];
+    const sid = sessionIdFromRequest(req);
     if (!sid) return;
     const session = await ctx.sessions.get(sid);
     if (!session) return;

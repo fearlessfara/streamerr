@@ -13,8 +13,8 @@ import {
   requestMedia,
   resolvePlaybackForPlay,
   seriesEpisodes,
-} from "../lib/api";
-import { actionLabel, formatRuntime } from "../lib/media";
+} from "@streamerr/client";
+import { actionLabel, formatRuntime } from "@streamerr/client";
 import { AppChrome } from "../components/AppChrome";
 
 function formatMb(bytes?: number): string {

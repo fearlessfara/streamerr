@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { searchMedia } from "../lib/api";
+import { searchMedia } from "@streamerr/client";
 import { AppChrome } from "../components/AppChrome";
 import { CatalogSkeleton } from "../components/CatalogSkeleton";
 import { MediaGrid } from "../components/MediaGrid";

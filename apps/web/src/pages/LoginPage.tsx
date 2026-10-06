@@ -2,8 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Button, Wordmark } from "@streamerr/ui";
-import { getOrCreateDeviceId } from "../lib/device";
-import { login } from "../lib/api";
+import { getOrCreateDeviceId, login } from "@streamerr/client";
 
 export function LoginPage() {
   const [username, setUsername] = useState("");
@@ -13,11 +12,11 @@ export function LoginPage() {
   const qc = useQueryClient();
 
   const mutation = useMutation({
-    mutationFn: () =>
+    mutationFn: async () =>
       login({
         username,
         password,
-        deviceId: getOrCreateDeviceId(),
+        deviceId: await getOrCreateDeviceId(localStorage),
         deviceName: "Streamerr Web",
       }),
     onSuccess: async () => {

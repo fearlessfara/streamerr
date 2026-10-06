@@ -75,8 +75,8 @@ Resolution: Jellyfin → Cache → Dispatcharr IPTV → Request
 
 ## Phase 8 — Android TV / Google TV
 
-- TV shell, launcher, D-pad, Back, MediaSession
-- Native playback where required, deep links, TV auth
-- Live TV remote / EPG QA
+- React Native TV app (`apps/tv`) sharing `@streamerr/client`
+- ExoPlayer via `react-native-video`, session cookie on media requests
+- Sideload APK (no Play Store)
 
 See [android-tv.md](./android-tv.md).

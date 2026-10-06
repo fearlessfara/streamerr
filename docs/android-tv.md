@@ -1,51 +1,56 @@
-# Android TV / Google TV Strategy
+# Android TV / Google TV
 
-Phase 1–2 ship a **web** TV-first UI. Native Android TV packaging is Phase 8.
-
-## Goals
-
-Eventually package the Streamerr React UI as an Android TV / Google TV application:
+Phase 8 is a React Native app in [`apps/tv`](../apps/tv) that shares [`@streamerr/client`](../packages/client) with the website. Playback uses ExoPlayer through `react-native-video`.
 
 ```text
-Streamerr React UI
-      │
-      ├── Web / PWA
-      └── Android TV shell → Google TV
+apps/web (React DOM)
+apps/tv  (React Native + Expo TV)
+        │
+        └── @streamerr/client → Streamerr API
 ```
 
-## Design constraints (from day one)
+The website stays Vite + CSS. TV screens are written for the remote.
 
-- Spatial / D-pad navigation (UP/DOWN/LEFT/RIGHT/ENTER/BACK/PLAY-PAUSE)
-- Large focus indicators; no hover-only interactions
-- Platform-specific APIs isolated behind adapters
-- Fullscreen playback with clear back-stack behaviour
-
-## Phase 8 scope
+## Features
 
 | Feature | Notes |
 |---------|-------|
-| Launcher integration | Leanback / TV banner, leanback launcher intent |
-| D-pad | Same focus primitives as web; QA on real remotes |
-| Back | Map Android Back to React Router / player exit |
-| Play/Pause | Hardware media keys → player |
-| MediaSession | Now playing metadata, transport controls |
-| Deep links | `streamerr://media/...` into details/player |
-| TV authentication | Device-friendly Jellyfin login (username list + PIN/password) |
-| Live TV | Channel zapping, favourites, EPG grid remote navigation |
-| Channel switching | Instant or near-instant tune via Dispatcharr live proxy |
-| EPG navigation | Grid focus model: channels × time; OK to tune |
-| Playback controls | Scrub, audio/subtitle if available, exit fullscreen |
+| Launcher | Leanback banner, `LEANBACK_LAUNCHER` via `@react-native-tvos/config-tv` |
+| Server URL | First-run screen; Change server from the profile control |
+| Auth | Jellyfin login; session id stored on device and sent as `Cookie` |
+| D-pad | React Native TV focus |
+| Back | Stack pop; player exits first |
+| Playback | HLS, progressive, live MPEG-TS; seek cap; sideloaded subtitles |
+| Media keys | Play/pause, skip, live channel up/down |
+| Live TV | Channels, favourites, zap |
 
-## Packaging candidates (evaluate in Phase 8)
+Deep links and Play Store are out of this pass.
 
-1. **Trusted Web Activity / Capitor-style WebView shell** wrapping the existing UI
-2. **React Native / Expo for TV** if web playback is insufficient
-3. Hybrid: web UI + native ExoPlayer for Dispatcharr/Jellyfin streams
+## Develop
 
-Prefer reusing the web focus system unless MediaSession / ExoPlayer requires a native player bridge.
+From the repo root:
 
-## Non-goals until Phase 8
+```bash
+npm install
+npm run build -w @streamerr/shared && npm run build -w @streamerr/client
+cd apps/tv
+EXPO_TV=1 npx expo prebuild --clean
+EXPO_TV=1 npx expo run:android
+```
 
-- Publishing to Google Play
-- Native Kotlin rewrite of the entire UI
-- Assuming a specific packaging framework before player requirements are known
+Needs Android Studio with an Android TV system image, or a Google TV with network debugging.
+
+## Sideload
+
+1. Build a release APK: `cd apps/tv && EXPO_TV=1 npx expo run:android --variant release` (or assemble after prebuild).
+2. On the TV: Settings → About → select the Android build row until developer options appear. Enable Network debugging.
+3. On the same LAN:
+
+```bash
+adb connect <tv-ip>:5555
+adb install -r android/app/build/outputs/apk/release/app-release.apk
+```
+
+Without a computer: install Downloader from the Play Store, allow unknown apps for Downloader, and open an `https` URL that serves the APK.
+
+On first launch, enter the Streamerr origin (for example `http://192.168.1.10:8787`) and sign in with Jellyfin.

@@ -37,10 +37,19 @@ export async function registerImageRoutes(app: FastifyInstance, ctx: AppContext)
       return reply.status(404).send({ error: "No image in mock mode" });
     }
 
+    const resize = z
+      .object({
+        maxWidth: z.coerce.number().int().positive().max(1920).optional(),
+        maxHeight: z.coerce.number().int().positive().max(1080).optional(),
+        quality: z.coerce.number().int().min(1).max(100).optional(),
+      })
+      .parse(req.query);
+
     const upstream = await ctx.jellyfin.openImage(
       userContext,
       params.itemId,
       params.imageType,
+      resize,
     );
     reply.status(upstream.status);
     const ct = upstream.headers.get("content-type");

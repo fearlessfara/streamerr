@@ -18,9 +18,7 @@ export function maxSeekableSecondsForSource(opts: {
     return knownDuration > 0 ? knownDuration : Infinity;
   }
   if (opts.downloadTotal && opts.downloadTotal > 0 && opts.downloadBytes > 0) {
-    // Margin so remux/HLS does not seek past downloaded bytes.
     return Math.max(0, (opts.downloadBytes / opts.downloadTotal) * knownDuration - 8);
   }
-  // Cache still downloading with unknown progress — small headroom only.
   return Math.max(30, knownDuration * 0.05);
 }

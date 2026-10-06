@@ -3,8 +3,8 @@ import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { MediaCard, Rail } from "@streamerr/ui";
 import type { Media } from "@streamerr/shared";
-import { resolvePlaybackForPlay } from "../lib/api";
-import { canPlayMedia, cardBadge, formatRuntime, mediaHref } from "../lib/media";
+import { resolvePlaybackForPlay } from "@streamerr/client";
+import { canPlayMedia, cardBadge, formatRuntime, mediaHref } from "@streamerr/client";
 
 export function MediaRailSection({
   id,

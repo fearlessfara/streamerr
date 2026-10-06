@@ -3,7 +3,6 @@ import { maxSeekableSecondsForSource } from "./seek-cap.js";
 
 describe("maxSeekableSecondsForSource", () => {
   it("allows full duration for Jellyfin (no download progress)", () => {
-    // 140 min movie × 5% ≈ 7 min — the old bug capped scrub here.
     expect(
       maxSeekableSecondsForSource({
         provider: "jellyfin",

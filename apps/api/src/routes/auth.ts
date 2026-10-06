@@ -70,6 +70,7 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
           id: session.jellyfinUserId,
           username: session.jellyfinUsername,
         },
+        sessionId: session.id,
       };
     },
   );

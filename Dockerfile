@@ -9,8 +9,11 @@ COPY package.json package-lock.json* ./
 COPY apps ./apps
 COPY packages ./packages
 COPY tsconfig.base.json ./
+# TV app is excluded from the image; stub the workspace so npm install succeeds.
+RUN mkdir -p apps/tv && printf '%s\n' '{"name":"@streamerr/tv","private":true,"version":"0.1.0"}' > apps/tv/package.json
 RUN npm install
 RUN npm run build -w @streamerr/shared
+RUN npm run build -w @streamerr/client
 RUN npm run build -w @streamerr/providers
 RUN npm run build -w @streamerr/ui
 RUN npm run build -w @streamerr/api

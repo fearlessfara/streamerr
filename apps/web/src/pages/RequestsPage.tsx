@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { listRequests } from "../lib/api";
+import { listRequests } from "@streamerr/client";
 import { AppChrome } from "../components/AppChrome";
 
 export function RequestsPage({ username }: { username: string }) {

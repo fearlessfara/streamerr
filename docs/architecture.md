@@ -221,4 +221,4 @@ One Streamerr container runs nginx (public port), the API (loopback), and the HL
 
 ## Implementation stop
 
-Phases 1–7 (web) are implemented. Phase 8 (Android TV packaging) remains optional. See [roadmap.md](./roadmap.md) and [android-tv.md](./android-tv.md).
+Phases 1–7 (web) are implemented. Phase 8 is the React Native Google TV app in `apps/tv`. See [roadmap.md](./roadmap.md) and [android-tv.md](./android-tv.md).

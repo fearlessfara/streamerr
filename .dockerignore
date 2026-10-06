@@ -26,6 +26,7 @@ data
 .DS_Store
 
 docs
+apps/tv
 **/*.test.ts
 **/vitest.config.ts
 scripts

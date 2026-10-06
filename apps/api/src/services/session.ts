@@ -5,6 +5,7 @@ import { sessions } from "../db/schema.js";
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14; // 14 days
 export const SESSION_COOKIE = "streamerr_session";
+export const SESSION_HEADER = "x-streamerr-session";
 
 export interface SessionRecord {
   id: string;

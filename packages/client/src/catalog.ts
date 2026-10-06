@@ -11,7 +11,6 @@ export function splitIntoShelves(
   return labels.map((title, i) => {
     const start = i * chunk;
     const slice = items.slice(start, start + chunk);
-    // Last shelf takes leftovers; empty middle shelves stay empty (no duplicate first chunk).
     const shelfItems = i === labels.length - 1 ? items.slice(start) : slice;
     return { id: `shelf-${i}`, title, items: shelfItems };
   });

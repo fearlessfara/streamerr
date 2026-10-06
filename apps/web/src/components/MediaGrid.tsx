@@ -2,8 +2,8 @@ import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { MediaCard } from "@streamerr/ui";
 import type { Media } from "@streamerr/shared";
-import { resolvePlaybackForPlay } from "../lib/api";
-import { canPlayMedia, formatRuntime, mediaHref } from "../lib/media";
+import { resolvePlaybackForPlay } from "@streamerr/client";
+import { canPlayMedia, formatRuntime, mediaHref } from "@streamerr/client";
 
 export function MediaGrid({
   id,

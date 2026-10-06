@@ -1,6 +1,5 @@
 import { normalizeSubtitleLanguage, type SubtitleTrack } from "@streamerr/shared";
-
-const KEY = "streamerr_subtitle_pref";
+import { readStorage, SUBTITLE_PREF_KEY, writeStorage, type KeyValueStorage } from "./storage.js";
 
 export type SubtitlePref =
   | { mode: "off" }
@@ -11,10 +10,9 @@ export type SubtitlePref =
       hearingImpaired?: boolean;
     };
 
-export function loadSubtitlePref(): SubtitlePref {
+function parsePref(raw: string | null): SubtitlePref {
+  if (!raw) return { mode: "off" };
   try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return { mode: "off" };
     const parsed = JSON.parse(raw) as SubtitlePref;
     if (parsed?.mode === "off") return { mode: "off" };
     if (parsed?.mode === "on" && typeof parsed.language === "string") {
@@ -31,25 +29,36 @@ export function loadSubtitlePref(): SubtitlePref {
   return { mode: "off" };
 }
 
-export function saveSubtitlePref(pref: SubtitlePref): void {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(pref));
-  } catch {
-    /* ignore quota / private mode */
-  }
+export function loadSubtitlePrefSync(storage?: KeyValueStorage): SubtitlePref {
+  if (!storage) return { mode: "off" };
+  const raw = storage.getItem(SUBTITLE_PREF_KEY);
+  if (typeof raw !== "string") return { mode: "off" };
+  return parsePref(raw);
 }
 
-export function saveSubtitleOff(): void {
-  saveSubtitlePref({ mode: "off" });
+export async function loadSubtitlePref(storage?: KeyValueStorage): Promise<SubtitlePref> {
+  const raw = await readStorage(storage, SUBTITLE_PREF_KEY);
+  return parsePref(raw);
 }
 
-export function saveSubtitleTrack(track: SubtitleTrack): void {
-  saveSubtitlePref({
-    mode: "on",
-    language: normalizeSubtitleLanguage(track.language) || "",
-    forced: Boolean(track.forced),
-    hearingImpaired: Boolean(track.hearingImpaired),
-  });
+export async function saveSubtitlePref(pref: SubtitlePref, storage?: KeyValueStorage): Promise<void> {
+  await writeStorage(storage, SUBTITLE_PREF_KEY, JSON.stringify(pref));
+}
+
+export async function saveSubtitleOff(storage?: KeyValueStorage): Promise<void> {
+  await saveSubtitlePref({ mode: "off" }, storage);
+}
+
+export async function saveSubtitleTrack(track: SubtitleTrack, storage?: KeyValueStorage): Promise<void> {
+  await saveSubtitlePref(
+    {
+      mode: "on",
+      language: normalizeSubtitleLanguage(track.language) || "",
+      forced: Boolean(track.forced),
+      hearingImpaired: Boolean(track.hearingImpaired),
+    },
+    storage,
+  );
 }
 
 /**
@@ -58,7 +67,7 @@ export function saveSubtitleTrack(track: SubtitleTrack): void {
  */
 export function resolveSubtitleIndex(
   tracks: SubtitleTrack[],
-  pref: SubtitlePref = loadSubtitlePref(),
+  pref: SubtitlePref,
 ): number | null {
   if (!tracks.length || pref.mode === "off") return null;
 
@@ -83,7 +92,6 @@ export function resolveSubtitleIndex(
       best = i;
     }
   }
-  // Language saved but no match on this title — stay off rather than guessing.
   if (wantLang && bestScore < 10) return null;
   return best;
 }

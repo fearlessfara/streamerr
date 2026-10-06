@@ -12,6 +12,7 @@
     "lint": "echo 'no lint configured'"
   },
   "dependencies": {
+    "@streamerr/client": "*",
     "@streamerr/shared": "*",
     "@streamerr/ui": "*",
     "@tanstack/react-query": "^5.67.2",

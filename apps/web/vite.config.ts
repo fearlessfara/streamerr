@@ -22,6 +22,10 @@ export default defineConfig({
         find: /^@streamerr\/shared$/,
         replacement: path.resolve(__dirname, "../../packages/shared/src/index.ts"),
       },
+      {
+        find: /^@streamerr\/client$/,
+        replacement: path.resolve(__dirname, "../../packages/client/src/index.ts"),
+      },
     ],
   },
   server: {

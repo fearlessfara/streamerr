@@ -6,7 +6,7 @@ import {
   formatCacheTtlRemaining,
   listAcquisitions,
   promoteAcquisition,
-} from "../lib/api";
+} from "@streamerr/client";
 import { AppChrome } from "../components/AppChrome";
 
 function formatMb(bytes?: number): string {

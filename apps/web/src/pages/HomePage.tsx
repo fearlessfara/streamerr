@@ -3,8 +3,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@streamerr/ui";
 import type { Media } from "@streamerr/shared";
-import { home, resolvePlaybackForPlay } from "../lib/api";
-import { actionLabel, canPlayMedia, formatRuntime, mediaHref } from "../lib/media";
+import { home, resolvePlaybackForPlay } from "@streamerr/client";
+import { actionLabel, canPlayMedia, formatRuntime, mediaHref } from "@streamerr/client";
 import { AppChrome } from "../components/AppChrome";
 import { MediaRailSection } from "../components/MediaRailSection";
 

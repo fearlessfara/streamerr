@@ -11,7 +11,7 @@ import {
   liveNow,
   playLiveChannel,
   toggleLiveFavourite,
-} from "../lib/api";
+} from "@streamerr/client";
 
 function formatClock(iso?: string): string {
   if (!iso) return "";

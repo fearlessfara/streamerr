@@ -2,8 +2,8 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useFocusable, Wordmark } from "@streamerr/ui";
-import { logout, searchMedia } from "../lib/api";
-import { mediaHref } from "../lib/media";
+import { logout, searchMedia } from "@streamerr/client";
+import { mediaHref } from "@streamerr/client";
 
 const LINKS = [
   { to: "/", label: "Home", focusId: "nav-home" },

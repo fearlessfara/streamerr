@@ -8,17 +8,16 @@ import { Button } from "@streamerr/ui";
 import {
   getAcquisition,
   listPlaybackSubtitles,
+  loadSubtitlePrefSync,
+  maxSeekableSecondsForSource,
   playLiveChannel,
   reportIptvProgress,
   reportProgress,
   resolvePlayback,
-} from "../lib/api";
-import {
   resolveSubtitleIndex,
   saveSubtitleOff,
   saveSubtitleTrack,
-} from "../lib/subtitle-pref";
-import { maxSeekableSecondsForSource } from "../lib/seek-cap";
+} from "@streamerr/client";
 
 interface LiveChannelRef {
   uuid: string;
@@ -904,10 +903,10 @@ export function PlayerPage() {
           if (current == null) next = 0;
           else if (current >= tracks.length - 1) next = null;
           else next = current + 1;
-          if (next == null) saveSubtitleOff();
+          if (next == null) void saveSubtitleOff(localStorage);
           else {
             const track = tracks[next];
-            if (track) saveSubtitleTrack(track);
+            if (track) void saveSubtitleTrack(track, localStorage);
           }
           return next;
         });
@@ -997,7 +996,7 @@ export function PlayerPage() {
     }
     // Off by default; restore last language (or Off) when that track exists.
     // Re-runs when async enrichment replaces the track list.
-    setSubIndex(resolveSubtitleIndex(textSubtitles(subtitleTracksState)));
+    setSubIndex(resolveSubtitleIndex(textSubtitles(subtitleTracksState), loadSubtitlePrefSync(localStorage)));
     setCues([]);
     setSubsOpen(false);
   }, [isLive, subtitleTracksState]);
@@ -1909,7 +1908,7 @@ export function PlayerPage() {
                         className={`player-menu-item${subIndex == null ? " is-active" : ""}`}
                         onClick={() => {
                           setSubIndex(null);
-                          saveSubtitleOff();
+                          saveSubtitleOff(localStorage);
                           setSubsOpen(false);
                           revealControls();
                         }}
@@ -1925,7 +1924,7 @@ export function PlayerPage() {
                           className={`player-menu-item${subIndex === index ? " is-active" : ""}`}
                           onClick={() => {
                             setSubIndex(index);
-                            saveSubtitleTrack(track);
+                            saveSubtitleTrack(track, localStorage);
                             setSubsOpen(false);
                             revealControls();
                           }}

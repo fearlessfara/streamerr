@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { catalogRails } from "../lib/api";
+import { catalogRails } from "@streamerr/client";
 import { AppChrome } from "../components/AppChrome";
 import { CatalogSkeleton } from "../components/CatalogSkeleton";
 import { MediaRailSection } from "../components/MediaRailSection";
