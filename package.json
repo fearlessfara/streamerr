@@ -13,6 +13,7 @@
     "dev:api": "npm run dev -w @streamerr/api",
     "dev:web": "npm run dev -w @streamerr/web",
     "dev:tv": "npm run start -w @streamerr/tv",
+    "dev:mobile": "npm run start -w @streamerr/mobile",
     "build": "npm run build -w @streamerr/shared && npm run build -w @streamerr/client && npm run build -w @streamerr/providers && npm run build -w @streamerr/ui && npm run build -w @streamerr/api && npm run build -w @streamerr/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",

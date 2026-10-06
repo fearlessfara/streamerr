@@ -80,3 +80,12 @@ Resolution: Jellyfin → Cache → Dispatcharr IPTV → Request
 - Sideload APK (no Play Store)
 
 See [android-tv.md](./android-tv.md).
+
+## Phase 9 — iOS / Android (phones & tablets)
+
+- React Native Expo app (`apps/mobile`) sharing `@streamerr/client`
+- Touch UI: bottom tabs, portrait browse, landscape player
+- HLS / progressive playback; Android live MPEG-TS; iOS live deferred until API HLS remux
+- Sideload / Simulator (no App Store / Play Store in this pass)
+
+See [mobile.md](./mobile.md).

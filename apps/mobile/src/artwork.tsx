@@ -1,0 +1,82 @@
+import { useEffect, useState } from "react";
+import { Image, type ImageResizeMode, type ImageStyle, type StyleProp } from "react-native";
+import { SESSION_COOKIE, SESSION_HEADER, getClient } from "@streamerr/client";
+
+/**
+ * Proxied `/api/images/*` URLs need the session. RN Image often drops custom headers
+ * on Android, so the session also goes in the query string (server accepts it).
+ */
+export function artworkUri(
+  url: string | undefined | null,
+  maxWidth?: number,
+  sessionId?: string | null,
+): string | undefined {
+  if (!url) return undefined;
+  const base = getClient().baseUrl;
+  if (!base) return url;
+  try {
+    const parsed = new URL(url, base);
+    if (!parsed.pathname.startsWith("/api/")) return parsed.href;
+    if (maxWidth) {
+      parsed.searchParams.set("maxWidth", String(maxWidth));
+      parsed.searchParams.set("quality", "80");
+    }
+    if (sessionId) {
+      parsed.searchParams.set(SESSION_COOKIE, sessionId);
+    }
+    const path = `${parsed.pathname}${parsed.search}`;
+    return new URL(path, base.endsWith("/") ? base : `${base}/`).href;
+  } catch {
+    return url;
+  }
+}
+
+function useSessionAuth(): { headers: Record<string, string>; sessionId: string | null } | null {
+  const [auth, setAuth] = useState<{ headers: Record<string, string>; sessionId: string | null } | null>(
+    null,
+  );
+  useEffect(() => {
+    let cancelled = false;
+    void getClient()
+      .sessionHeaders()
+      .then((next) => {
+        if (cancelled) return;
+        const session = next[SESSION_HEADER] ?? null;
+        setAuth({
+          sessionId: session,
+          headers: session ? { [SESSION_HEADER]: session } : {},
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return auth;
+}
+
+export function Artwork({
+  url,
+  style,
+  resizeMode = "cover",
+  maxWidth,
+  onError,
+}: {
+  url?: string | null;
+  style: StyleProp<ImageStyle>;
+  resizeMode?: ImageResizeMode;
+  maxWidth?: number;
+  onError?: () => void;
+}) {
+  const auth = useSessionAuth();
+  const uri = artworkUri(url, maxWidth, auth?.sessionId);
+  if (!uri || !auth) return null;
+  return (
+    <Image
+      source={{ uri, headers: auth.headers }}
+      style={style}
+      resizeMode={resizeMode}
+      resizeMethod="resize"
+      onError={onError}
+    />
+  );
+}

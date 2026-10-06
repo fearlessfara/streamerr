@@ -32,6 +32,7 @@ Streamerr sits on top of **Jellyfin**, **Seerr**, and **Dispatcharr**. It does n
 | 6 Live TV | Done — channels, favourites, EPG guide, live play |
 | 7 Episodes / CW | Done — merged episodes, IPTV progress, Next Up |
 | 8 Android TV | React Native app in `apps/tv` — see [docs/android-tv.md](./docs/android-tv.md) |
+| 9 iOS / Android | React Native app in `apps/mobile` — see [docs/mobile.md](./docs/mobile.md) |
 
 See [docs/roadmap.md](./docs/roadmap.md).
 
@@ -117,7 +118,7 @@ npm run typecheck
 npm run lint
 ```
 
-Monorepo workspaces: `apps/web`, `apps/tv`, `apps/api`, `packages/shared`, `packages/client`, `packages/providers`, `packages/ui`.
+Monorepo workspaces: `apps/web`, `apps/tv`, `apps/mobile`, `apps/api`, `packages/shared`, `packages/client`, `packages/providers`, `packages/ui`.
 
 ## License
 
