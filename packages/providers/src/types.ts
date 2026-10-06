@@ -69,8 +69,8 @@ export interface PlaybackProvider extends MediaProvider {
 
 export interface DiscoveryProvider extends MediaProvider {
   discoverTrending(opts?: { page?: number; mediaType?: "movie" | "tv" }): Promise<Media[]>;
-  discoverMovies?(opts?: { page?: number }): Promise<Media[]>;
-  discoverTv?(opts?: { page?: number }): Promise<Media[]>;
+  discoverMovies?(opts?: { page?: number; genreId?: number }): Promise<Media[]>;
+  discoverTv?(opts?: { page?: number; genreId?: number }): Promise<Media[]>;
   search(query: string, opts?: { page?: number }): Promise<Media[]>;
   getDetails?(mediaType: "movie" | "tv", tmdbId: number): Promise<Media | null>;
 }

@@ -73,3 +73,19 @@ export function actionLabel(media: Media): string {
     }
   }
 }
+
+/** Poster chip for discovery rails — Download when requestable and not on IPTV. */
+export function cardBadge(media: Media): string | undefined {
+  const seerr = media.availability.find((a) => a.provider === "seerr");
+  if (seerr?.mediaStatus === "PENDING" || seerr?.requestStatus === "PENDING") {
+    return "Requested";
+  }
+  if (seerr?.mediaStatus === "PROCESSING" || seerr?.requestStatus === "APPROVED") {
+    return "Processing";
+  }
+  const onIptv = media.availability.some((a) => a.provider === "dispatcharr" && a.available);
+  if (media.preferredAction === "REQUEST" && !onIptv) {
+    return "Download";
+  }
+  return undefined;
+}

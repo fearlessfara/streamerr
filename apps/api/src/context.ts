@@ -18,6 +18,7 @@ import { LiveFavouritesStore } from "./services/live-favourites.js";
 import { CacheManager } from "./services/cache-manager.js";
 import { IptvConnectionManager } from "./services/iptv-connection-manager.js";
 import { IptvProgressStore } from "./services/iptv-progress.js";
+import { startVodCatalogSync } from "./services/vod-catalog-sync.js";
 
 export interface AppContext {
   config: AppConfig;
@@ -192,6 +193,18 @@ export function createAppContext(config: AppConfig): AppContext {
       seasonNumber: identity.seasonNumber,
       episodeNumber: identity.episodeNumber,
     };
+  });
+
+  // Background Dispatcharr VOD catalogue index (metadata only — no IPTV streams).
+  startVodCatalogSync({
+    db,
+    dispatcharr: dispatcharr as DispatcharrProvider,
+    preferredLanguages: config.STREAMERR_PREFERRED_LANGUAGES,
+    intervalMs: config.STREAMERR_VOD_SYNC_INTERVAL_MS,
+    enabled:
+      !useMocks &&
+      Boolean(config.DISPATCHARR_URL?.trim()) &&
+      dispatcharr instanceof DispatcharrProvider,
   });
 
   return ctx;

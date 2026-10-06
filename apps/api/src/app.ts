@@ -16,6 +16,7 @@ import { registerMediaRoutes } from "./routes/media.js";
 import { registerPlaybackRoutes } from "./routes/playback.js";
 import { registerImageRoutes } from "./routes/images.js";
 import { registerDiscoverRoutes } from "./routes/discover.js";
+import { registerCatalogRoutes } from "./routes/catalog.js";
 import { registerRequestRoutes } from "./routes/request.js";
 import { registerAcquisitionRoutes } from "./routes/acquisition.js";
 import { registerLiveRoutes } from "./routes/live.js";
@@ -74,6 +75,7 @@ export async function buildApp(ctx: AppContext) {
   await registerHomeRoutes(app, ctx);
   await registerMediaRoutes(app, ctx);
   await registerDiscoverRoutes(app, ctx);
+  await registerCatalogRoutes(app, ctx);
   await registerRequestRoutes(app, ctx);
   await registerAcquisitionRoutes(app, ctx);
   await registerLibraryRoutes(app, ctx);

@@ -54,6 +54,17 @@ const MediaInfoSchema = z
           .passthrough(),
       )
       .optional(),
+    seasons: z
+      .array(
+        z
+          .object({
+            seasonNumber: z.number(),
+            status: z.number().optional(),
+            status4k: z.number().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
   })
   .passthrough();
 
@@ -106,6 +117,50 @@ export const SeerrMovieDetailsSchema = z
   })
   .passthrough();
 
+const SeerrGenreSchema = z
+  .object({
+    id: z.number().optional(),
+    name: z.string(),
+  })
+  .passthrough();
+
+const SeerrTvSeasonSummarySchema = z
+  .object({
+    id: z.number().optional(),
+    name: z.string().optional(),
+    seasonNumber: z.number(),
+    episodeCount: z.number().optional(),
+    airDate: z.string().nullable().optional(),
+    overview: z.string().nullable().optional(),
+    posterPath: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+export const SeerrTvEpisodeSchema = z
+  .object({
+    id: z.number().optional(),
+    name: z.string().optional(),
+    episodeNumber: z.number(),
+    seasonNumber: z.number().optional(),
+    airDate: z.string().nullable().optional(),
+    overview: z.string().nullable().optional(),
+    stillPath: z.string().nullable().optional(),
+    runtime: z.number().nullable().optional(),
+  })
+  .passthrough();
+
+export const SeerrTvSeasonSchema = z
+  .object({
+    id: z.number().optional(),
+    name: z.string().optional(),
+    seasonNumber: z.number(),
+    airDate: z.string().nullable().optional(),
+    overview: z.string().nullable().optional(),
+    posterPath: z.string().nullable().optional(),
+    episodes: z.array(SeerrTvEpisodeSchema).optional(),
+  })
+  .passthrough();
+
 export const SeerrTvDetailsSchema = z
   .object({
     id: z.number(),
@@ -117,6 +172,12 @@ export const SeerrTvDetailsSchema = z
     posterPath: z.string().optional().nullable(),
     backdropPath: z.string().optional().nullable(),
     firstAirDate: z.string().optional().nullable(),
+    episodeRunTime: z.array(z.number()).optional(),
+    genres: z.array(SeerrGenreSchema).optional(),
+    status: z.string().optional(),
+    numberOfSeasons: z.number().optional(),
+    numberOfEpisodes: z.number().optional(),
+    seasons: z.array(SeerrTvSeasonSummarySchema).optional(),
     mediaInfo: MediaInfoSchema.optional().nullable(),
   })
   .passthrough();
@@ -162,5 +223,7 @@ export const SeerrRequestListSchema = z
 export type SeerrSearchResult = z.infer<typeof SeerrSearchResultSchema>;
 export type SeerrMovieDetails = z.infer<typeof SeerrMovieDetailsSchema>;
 export type SeerrTvDetails = z.infer<typeof SeerrTvDetailsSchema>;
+export type SeerrTvEpisode = z.infer<typeof SeerrTvEpisodeSchema>;
+export type SeerrTvSeason = z.infer<typeof SeerrTvSeasonSchema>;
 export type SeerrMediaInfo = z.infer<typeof MediaInfoSchema>;
 export type SeerrMediaRequest = z.infer<typeof SeerrMediaRequestSchema>;

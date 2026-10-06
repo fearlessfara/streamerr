@@ -178,8 +178,10 @@ export function DetailsPage({ username }: { username: string }) {
   const chips = media
     ? [
         media.metadata.year ? String(media.metadata.year) : null,
-        media.identity.mediaType,
+        media.metadata.seriesStatus,
+        media.identity.mediaType === "tv" ? "Series" : media.identity.mediaType,
         formatRuntime(media.metadata.runtimeMinutes),
+        ...(media.metadata.genres ?? []),
         !media.identity.tmdbId ? "Library only" : null,
       ].filter(Boolean)
     : [];
@@ -348,7 +350,7 @@ export function DetailsPage({ username }: { username: string }) {
                               className={`episode-season-tab${season === s ? " active" : ""}`}
                               onClick={() => setSeason(s)}
                             >
-                              Season {s}
+                              {s === 0 ? "Specials" : `Season ${s}`}
                             </button>
                           ))}
                         </div>
@@ -371,8 +373,14 @@ export function DetailsPage({ username }: { username: string }) {
                           ep.preferredAction === "PLAY_IPTV" ||
                           ep.preferredAction === "PLAY_JELLYFIN" ||
                           ep.preferredAction === "PLAY_CACHE";
+                        const when = [
+                          ep.airDate ? ep.airDate.slice(0, 10) : null,
+                          ep.runtimeMinutes ? formatRuntime(ep.runtimeMinutes) : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ");
                         return (
-                          <li key={`${ep.seasonNumber}-${ep.episodeNumber}-${ep.identity.tmdbId}`}>
+                          <li key={`${ep.seasonNumber}-${ep.episodeNumber}`}>
                             <div className="episode-row-wrap">
                               <button
                                 type="button"
@@ -380,16 +388,21 @@ export function DetailsPage({ username }: { username: string }) {
                                 disabled={!playable || playBusy}
                                 onClick={() => playEpisode.mutate(ep)}
                               >
-                                <span className="episode-num">
-                                  E{String(ep.episodeNumber).padStart(2, "0")}
-                                </span>
+                                {ep.stillUrl ? (
+                                  <img className="episode-still" src={ep.stillUrl} alt="" />
+                                ) : (
+                                  <span className="episode-num">
+                                    E{String(ep.episodeNumber).padStart(2, "0")}
+                                  </span>
+                                )}
                                 <span className="episode-meta">
-                                  <span className="episode-title">{ep.title}</span>
-                                  {ep.runtimeMinutes ? (
-                                    <span className="episode-runtime">
-                                      {formatRuntime(ep.runtimeMinutes)}
-                                    </span>
+                                  <span className="episode-title">
+                                    {ep.episodeNumber}. {ep.title}
+                                  </span>
+                                  {ep.overview ? (
+                                    <span className="episode-overview">{ep.overview}</span>
                                   ) : null}
+                                  {when ? <span className="episode-runtime">{when}</span> : null}
                                 </span>
                                 <span className="episode-play">
                                   {playable

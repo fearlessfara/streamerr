@@ -3,7 +3,7 @@ import { ProviderError } from "@streamerr/shared";
 import { HttpClient } from "../http.js";
 import type { DiscoveryProvider, MediaRequestSummary, RequestProvider } from "../types.js";
 import { SEERR_CAPABILITIES } from "../types.js";
-import { identityNeedsTmdb, mapMediaInfoToRequestAvailability, mapMovieDetailsToMedia, mapSearchResultToMedia, mapTvDetailsToMedia } from "./map.js";
+import { identityNeedsTmdb, mapMediaInfoToRequestAvailability, mapMovieDetailsToMedia, mapSearchResultToMedia, mapSeerrEpisodeToMedia, mapTvDetailsToMedia } from "./map.js";
 import {
   MEDIA_STATUS_LABEL,
   REQUEST_STATUS_LABEL,
@@ -11,8 +11,10 @@ import {
   SeerrRequestListSchema,
   SeerrResultsPageSchema,
   SeerrTvDetailsSchema,
+  SeerrTvSeasonSchema,
   type SeerrMediaRequest,
   type SeerrSearchResult,
+  type SeerrTvDetails,
 } from "./schemas.js";
 import { z } from "zod";
 
@@ -105,17 +107,21 @@ export class SeerrProvider implements DiscoveryProvider, RequestProvider {
     return this.mapResults(data.results ?? []);
   }
 
-  async discoverMovies(opts?: { page?: number }): Promise<Media[]> {
+  async discoverMovies(opts?: { page?: number; genreId?: number }): Promise<Media[]> {
+    const query: Record<string, string | number> = { page: opts?.page ?? 1 };
+    if (opts?.genreId != null && opts.genreId > 0) query.genre = opts.genreId;
     const { data } = await this.http().request("GET", "/api/v1/discover/movies", {
-      query: { page: opts?.page ?? 1 },
+      query,
       schema: SeerrResultsPageSchema,
     });
     return this.mapResults(data.results ?? []);
   }
 
-  async discoverTv(opts?: { page?: number }): Promise<Media[]> {
+  async discoverTv(opts?: { page?: number; genreId?: number }): Promise<Media[]> {
+    const query: Record<string, string | number> = { page: opts?.page ?? 1 };
+    if (opts?.genreId != null && opts.genreId > 0) query.genre = opts.genreId;
     const { data } = await this.http().request("GET", "/api/v1/discover/tv", {
-      query: { page: opts?.page ?? 1 },
+      query,
       schema: SeerrResultsPageSchema,
     });
     return this.mapResults(data.results ?? []);
@@ -151,6 +157,44 @@ export class SeerrProvider implements DiscoveryProvider, RequestProvider {
       if (err instanceof ProviderError && err.code === "not_found") return null;
       throw err;
     }
+  }
+
+  /**
+   * Full TMDb episode guide from Seerr. This is the series page spine:
+   * an episode can be missing from Jellyfin and still be listed, then
+   * marked playable when IPTV VOD has that SxxExx.
+   */
+  async listTvEpisodes(tmdbId: number): Promise<Media[]> {
+    const { data } = await this.http().request(
+      "GET",
+      `/api/v1/tv/${encodeURIComponent(String(tmdbId))}`,
+      { schema: SeerrTvDetailsSchema },
+    );
+    const seasonNumbers = seasonNumbersFromDetails(data);
+    if (seasonNumbers.length === 0) return [];
+
+    const seasonStatus = new Map<number, number>();
+    for (const season of data.mediaInfo?.seasons ?? []) {
+      if (season.status != null) seasonStatus.set(season.seasonNumber, season.status);
+    }
+    const seriesStatus = data.mediaInfo?.status;
+
+    const lists = await mapPool(seasonNumbers, 4, async (seasonNumber) => {
+      try {
+        const { data: season } = await this.http().request(
+          "GET",
+          `/api/v1/tv/${encodeURIComponent(String(tmdbId))}/season/${encodeURIComponent(String(seasonNumber))}`,
+          { schema: SeerrTvSeasonSchema },
+        );
+        const status = seasonStatus.get(seasonNumber) ?? seriesStatus;
+        return (season.episodes ?? []).map((episode) =>
+          mapSeerrEpisodeToMedia(episode, tmdbId, seasonNumber, status),
+        );
+      } catch {
+        return [];
+      }
+    });
+    return lists.flat();
   }
 
   async getRequestAvailability(
@@ -317,4 +361,29 @@ function yearFromIso(date?: string | null): number | undefined {
   if (!date || date.length < 4) return undefined;
   const year = Number(date.slice(0, 4));
   return Number.isFinite(year) ? year : undefined;
+}
+
+function seasonNumbersFromDetails(details: SeerrTvDetails): number[] {
+  const fromList = (details.seasons ?? [])
+    .filter((season) => season.seasonNumber >= 0 && (season.episodeCount == null || season.episodeCount > 0))
+    .map((season) => season.seasonNumber);
+  if (fromList.length > 0) return [...new Set(fromList)].sort((a, b) => a - b);
+  const count = details.numberOfSeasons ?? 0;
+  if (count <= 0) return [];
+  return Array.from({ length: count }, (_, i) => i + 1);
+}
+
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  if (items.length === 0) return [];
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      out[index] = await fn(items[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }

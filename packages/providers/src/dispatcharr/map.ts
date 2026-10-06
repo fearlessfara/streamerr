@@ -2,7 +2,7 @@ import type { DispatcharrStreamCandidate, Media } from "@streamerr/shared";
 import { parseCatalogueLanguageHints, resolvePreferredAction } from "@streamerr/shared";
 import type { DispatcharrEpisode, DispatcharrMovie, DispatcharrSeries } from "./schemas.js";
 
-function parseTmdbId(raw: string | number | null | undefined): number | undefined {
+export function parseTmdbId(raw: string | number | null | undefined): number | undefined {
   if (raw === null || raw === undefined || raw === "") return undefined;
   const n = Number(String(raw).replace(/^tmdb:/i, ""));
   return Number.isFinite(n) && n > 0 ? n : undefined;
@@ -116,8 +116,8 @@ export function mapEpisodeToMedia(episode: DispatcharrEpisode, seriesTmdbId?: nu
       canPlay: true,
     },
   ];
-  const season = episode.season_number ?? 0;
-  const ep = episode.episode_number ?? 0;
+  const numbers = seasonEpisodeNumbers(episode);
+  const ep = numbers.episode ?? 0;
   // Titles often look like "EN - Show - S01E01 - Pilot"
   const raw = episode.name ?? "";
   const seMatch = raw.match(/S(\d+)\s*E(\d+)\s*[-–:]\s*(.+)$/i);
@@ -126,8 +126,8 @@ export function mapEpisodeToMedia(episode: DispatcharrEpisode, seriesTmdbId?: nu
     identity: {
       ...(seriesTmdbId !== undefined ? { tmdbId: seriesTmdbId } : {}),
       mediaType: "episode",
-      seasonNumber: episode.season_number ?? undefined,
-      episodeNumber: episode.episode_number ?? undefined,
+      ...(numbers.season != null ? { seasonNumber: numbers.season } : {}),
+      ...(numbers.episode != null ? { episodeNumber: numbers.episode } : {}),
     },
     metadata: {
       title: epTitle,
@@ -137,6 +137,29 @@ export function mapEpisodeToMedia(episode: DispatcharrEpisode, seriesTmdbId?: nu
     availability,
     preferredAction: resolvePreferredAction(availability),
   };
+}
+
+/** IPTV rows sometimes omit season_number and only encode SxxExx in the title. */
+function seasonEpisodeNumbers(episode: DispatcharrEpisode): {
+  season?: number;
+  episode?: number;
+} {
+  let season = finiteInt(episode.season_number);
+  let ep = finiteInt(episode.episode_number);
+  const missing = (season == null && ep == null) || (season === 0 && ep === 0);
+  if (missing) {
+    const match = (episode.name ?? "").match(/S(\d+)\s*E(\d+)/i);
+    if (match) {
+      season = Number(match[1]);
+      ep = Number(match[2]);
+    }
+  }
+  return { season, episode: ep };
+}
+
+function finiteInt(value: number | null | undefined): number | undefined {
+  if (value == null || !Number.isFinite(value) || value < 0) return undefined;
+  return value;
 }
 
 export function tmdbMatches(

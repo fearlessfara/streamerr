@@ -1,26 +1,19 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Button } from "@streamerr/ui";
-import { discoverTv, libraryItems } from "../lib/api";
+import { catalogRails } from "../lib/api";
 import { AppChrome } from "../components/AppChrome";
 import { CatalogSkeleton } from "../components/CatalogSkeleton";
 import { MediaRailSection } from "../components/MediaRailSection";
 
 export function SeriesPage({ username }: { username: string }) {
-  const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
 
-  const library = useQuery({
-    queryKey: ["library", "tv", search],
-    queryFn: () => libraryItems("tv", { limit: 48, search: search.trim() || undefined }),
+  const catalog = useQuery({
+    queryKey: ["catalog", "tv", search],
+    queryFn: () => catalogRails("tv", { search: search.trim() || undefined }),
   });
 
-  const discover = useQuery({
-    queryKey: ["discover", "tv", page],
-    queryFn: () => discoverTv(page),
-  });
-
-  const popular = useMemo(() => discover.data?.items ?? [], [discover.data?.items]);
+  const rows = catalog.data?.rows ?? [];
 
   return (
     <AppChrome username={username} solid>
@@ -39,50 +32,31 @@ export function SeriesPage({ username }: { username: string }) {
           </label>
         </div>
 
-        {library.isLoading ? (
+        {catalog.isLoading ? (
           <div className="catalog-body">
             <CatalogSkeleton cards={8} />
           </div>
         ) : null}
 
-        <div className="rails">
-          <MediaRailSection
-            id="series-library"
-            title="My Library"
-            items={library.data?.items ?? []}
-            emptyText="No series in Jellyfin yet."
-            autoFocusFirst
-          />
-          {discover.isLoading && page === 1 ? (
-            <CatalogSkeleton cards={8} />
-          ) : (
-            <MediaRailSection
-              id="series-popular"
-              title="Popular"
-              items={popular}
-              emptyText="No popular series found."
-            />
-          )}
-        </div>
+        {catalog.isError ? (
+          <div className="page-status error" role="alert">
+            {(catalog.error as Error).message}
+          </div>
+        ) : null}
 
-        <div className="catalog-pager">
-          <Button
-            id="series-prev"
-            variant="ghost"
-            disabled={page <= 1 || discover.isFetching}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-          >
-            Previous
-          </Button>
-          <span className="catalog-pager-label">Page {page}</span>
-          <Button
-            id="series-next"
-            variant="ghost"
-            disabled={!popular.length || discover.isFetching}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            More
-          </Button>
+        <div className="rails">
+          {rows.map((row, rowIndex) => (
+            <MediaRailSection
+              key={row.id}
+              id={row.id}
+              title={row.title}
+              items={row.items}
+              emptyText={
+                row.id === "library" ? "No series in Jellyfin yet." : "Nothing here yet."
+              }
+              autoFocusFirst={rowIndex === 0}
+            />
+          ))}
         </div>
       </main>
     </AppChrome>

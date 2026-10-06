@@ -83,6 +83,26 @@ Items without TMDb remain first-class via `jellyfinItemId`.
 
 Browsers often cannot attach `Authorization` on `<video>`/`<img>` — Streamerr proxies or tokenizes media URLs.
 
+### Streamerr seek behaviour
+
+- **DirectPlay** (browser-safe codecs): progressive `/Videos/{id}/stream?static=true` via the media plane. Native `<video>` seek.
+- **Transcode HLS** (AC3/DTS/TrueHD audio, etc.): Jellyfin HLS through `/api/playback/jellyfin/stream` + playlist rewrite. Scrub uses plain `currentTime`; Continue Watching is applied once via hls.js `startPosition`.
+- Do **not** send `StartTimeTicks` on PlaybackInfo / transcoding URLs together with client-side resume — the playlist is full VOD from t=0 and the player seeks.
+
+The player must **not** apply IPTV cache download caps (`knownDuration * 0.05`) to Jellyfin titles. That incorrectly limited scrub on a ~2h movie to ~7 minutes (Continue Watching territory).
+
+### Audio track switching
+
+DirectPlay delivers the whole container; Chromium ignores `AudioStreamIndex` on static URLs. When the user picks a non-default audio track, Streamerr re-calls PlaybackInfo with `AudioStreamIndex` and forces **Transcode HLS** (or DirectStream remux) so Jellyfin emits only that track. The `transcodingPath` is also patched with `AudioStreamIndex` defensively.
+
+### Jellyfin transcoding settings (if scrub still fails after the above)
+
+In Jellyfin Dashboard → Playback:
+
+- Prefer **not** deleting temporary transcoded segments while a session is active (otherwise seeking back re-encodes and can stall).
+- Avoid aggressive throttle that stops encoding far ahead of the playhead if you expect large scrub jumps on Transcode titles.
+- Confirm the media playlist for a Transcode title includes `#EXT-X-ENDLIST` and segment durations summing to the runtime (VOD). Streamerr’s rewrite only remaps URIs; it must preserve `ENDLIST`.
+
 ## Error behaviour
 
 - `401` invalid credentials / expired token

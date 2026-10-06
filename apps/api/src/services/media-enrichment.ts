@@ -3,6 +3,7 @@ import { resolvePreferredAction } from "@streamerr/shared";
 import { DispatcharrProvider, type UserContext } from "@streamerr/providers";
 import type { AppContext } from "../context.js";
 import { lookupDispatcharrIndex, rememberDispatcharrMedia } from "./dispatcharr-index.js";
+import { indexedTmdbKeys } from "./vod-catalog-sync.js";
 
 /**
  * Merge Jellyfin + Dispatcharr + Seerr for a TMDb title.
@@ -87,36 +88,89 @@ export async function resolveMediaByTmdb(
   };
 }
 
-/** Attach Jellyfin playability onto discovery rows when already in library. */
-export async function enrichDiscoveryRow(
+/**
+ * Attach IPTV (from SQLite index) and optional Jellyfin library membership onto
+ * discovery rows. One index lookup for the whole rail — no per-poster Dispatcharr search.
+ *
+ * Series index hits are marked available but not directly playable (episode-level play).
+ * Movies are playable from the card.
+ */
+export function enrichDiscoveryRow(
   ctx: AppContext,
-  userContext: UserContext,
   items: Media[],
-): Promise<Media[]> {
-  return Promise.all(
-    items.map(async (item) => {
+  opts?: {
+    /** TMDb ids already known to be in the Jellyfin library (from the library rail). */
+    libraryKeys?: Set<string>;
+  },
+): Media[] {
+  const keys = items
+    .map((item) => {
       const tmdbId = item.identity.tmdbId;
       const mediaType = item.identity.mediaType;
-      if (!tmdbId || (mediaType !== "movie" && mediaType !== "tv")) return item;
+      if (!tmdbId || (mediaType !== "movie" && mediaType !== "tv")) return null;
+      return { tmdbId, mediaType };
+    })
+    .filter((k): k is { tmdbId: number; mediaType: "movie" | "tv" } => k != null);
 
-      const jellyfin = await ctx.jellyfin
-        .findByTmdb(userContext, tmdbId, mediaType)
-        .catch(() => null);
-      if (!jellyfin) return item;
+  const indexed = indexedTmdbKeys(ctx.db, keys);
+  const libraryKeys = opts?.libraryKeys;
+  const preferredLanguages =
+    ctx.dispatcharr instanceof DispatcharrProvider
+      ? ctx.dispatcharr.getPreferredLanguages()
+      : undefined;
 
-      const availability = [
-        ...jellyfin.availability,
-        ...item.availability.filter((a) => a.provider !== "jellyfin"),
-      ];
-      return {
-        ...item,
-        identity: {
-          ...item.identity,
-          jellyfinItemId: jellyfin.identity.jellyfinItemId,
-        },
-        availability,
-        preferredAction: resolvePreferredAction(availability),
-      };
-    }),
-  );
+  return items.map((item) => {
+    const tmdbId = item.identity.tmdbId;
+    const mediaType = item.identity.mediaType;
+    if (!tmdbId || (mediaType !== "movie" && mediaType !== "tv")) return item;
+
+    const key = `${mediaType}:${tmdbId}`;
+    const onIptv = indexed.has(key);
+    const inLibrary = libraryKeys?.has(key) ?? false;
+
+    const indexedHit = onIptv
+      ? lookupDispatcharrIndex(ctx.db, tmdbId, mediaType, preferredLanguages)
+      : null;
+
+    const jellyfinAvail = inLibrary
+      ? ({
+          provider: "jellyfin" as const,
+          available: true,
+          canPlay: true,
+        } as const)
+      : null;
+
+    const dispatcharrAvail = indexedHit
+      ? ({
+          provider: "dispatcharr" as const,
+          available: true,
+          ...(mediaType === "movie"
+            ? { movieId: indexedHit.dispatcharrId }
+            : { seriesId: indexedHit.dispatcharrId }),
+          uuid: indexedHit.uuid,
+          tmdbId: String(tmdbId),
+          catalogueLanguage: indexedHit.catalogueLanguage ?? undefined,
+          candidates: indexedHit.streamId ? [{ streamId: indexedHit.streamId }] : [],
+          // Series play is episode-level; movies can start from the card.
+          canPlay: mediaType === "movie",
+        } as const)
+      : null;
+
+    const availability = [
+      ...(jellyfinAvail
+        ? [jellyfinAvail]
+        : item.availability.filter((a) => a.provider === "jellyfin")),
+      ...item.availability.filter((a) => a.provider === "cache"),
+      ...(dispatcharrAvail
+        ? [dispatcharrAvail]
+        : item.availability.filter((a) => a.provider === "dispatcharr")),
+      ...item.availability.filter((a) => a.provider === "seerr"),
+    ];
+
+    return {
+      ...item,
+      availability,
+      preferredAction: resolvePreferredAction(availability),
+    };
+  });
 }

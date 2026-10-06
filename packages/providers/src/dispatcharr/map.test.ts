@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { durationFromSecs, mapMovieToMedia, mapSeriesToMedia, tmdbMatches } from "./map.js";
+import { durationFromSecs, mapEpisodeToMedia, mapMovieToMedia, mapSeriesToMedia, tmdbMatches } from "./map.js";
 
 describe("dispatcharr map", () => {
   it("matches tmdb ids as strings or numbers", () => {
@@ -52,6 +52,23 @@ describe("dispatcharr map", () => {
     if (da?.provider === "dispatcharr") {
       expect(da.catalogueLanguage).toBe("en");
     }
+  });
+
+  it("reads SxxExx from the IPTV title when season fields are missing", () => {
+    const media = mapEpisodeToMedia(
+      {
+        id: 9,
+        uuid: "99999999-9999-9999-9999-999999999999",
+        name: "EN - Show - S01E04 - Pilot",
+        season_number: null,
+        episode_number: null,
+      },
+      5920,
+    );
+    expect(media.identity.seasonNumber).toBe(1);
+    expect(media.identity.episodeNumber).toBe(4);
+    expect(media.metadata.title).toBe("Pilot");
+    expect(media.preferredAction).toBe("PLAY_IPTV");
   });
 
   it("maps series as available but not directly playable", () => {

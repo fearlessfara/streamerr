@@ -25,7 +25,13 @@ import {
   type CloudflareAccessServiceToken,
   type DispatcharrAuth,
 } from "./auth.js";
-import { mapEpisodeToMedia, mapMovieToMedia, mapSeriesToMedia, tmdbMatches } from "./map.js";
+import {
+  mapEpisodeToMedia,
+  mapMovieToMedia,
+  mapSeriesToMedia,
+  parseTmdbId,
+  tmdbMatches,
+} from "./map.js";
 import {
   DispatcharrChannelGroupSchema,
   DispatcharrChannelSchema,
@@ -35,6 +41,7 @@ import {
   DispatcharrMovieSchema,
   DispatcharrPageSchema,
   DispatcharrProgramSchema,
+  DispatcharrSeriesProviderInfoSchema,
   DispatcharrSeriesSchema,
   type DispatcharrChannel,
   type DispatcharrMovie,
@@ -419,7 +426,54 @@ export class DispatcharrProvider implements VodProvider, LiveTvProvider, Acquisi
       if (sa !== sb) return sa - sb;
       return (a.identity.episodeNumber ?? 0) - (b.identity.episodeNumber ?? 0);
     });
-    return items;
+    if (items.length > 0) return items;
+    return this.episodesFromProviderInfo(seriesId, opts?.seriesTmdbId);
+  }
+
+  /**
+   * XC catalogues sometimes keep the episode tree on series provider-info
+   * before (or instead of) the /episodes/ table.
+   */
+  private async episodesFromProviderInfo(
+    seriesId: number,
+    seriesTmdbId?: number,
+  ): Promise<Media[]> {
+    const http = await this.http();
+    try {
+      const { status, data } = await http.request<unknown>(
+        "GET",
+        `/api/vod/series/${seriesId}/provider-info/`,
+        { allowStatuses: [200, 404] },
+      );
+      if (status === 404) return [];
+      const parsed = z
+        .union([
+          DispatcharrSeriesProviderInfoSchema,
+          z.array(DispatcharrSeriesProviderInfoSchema),
+        ])
+        .safeParse(data);
+      if (!parsed.success) return [];
+      const payloads = Array.isArray(parsed.data) ? parsed.data : [parsed.data];
+      const items: Media[] = [];
+      for (const payload of payloads) {
+        for (const episodes of Object.values(payload.episodes ?? {})) {
+          for (const raw of episodes) {
+            const episode = DispatcharrEpisodeSchema.safeParse(raw);
+            if (!episode.success || !episode.data.uuid) continue;
+            items.push(mapEpisodeToMedia(episode.data, seriesTmdbId));
+          }
+        }
+      }
+      items.sort((a, b) => {
+        const sa = a.identity.seasonNumber ?? 0;
+        const sb = b.identity.seasonNumber ?? 0;
+        if (sa !== sb) return sa - sb;
+        return (a.identity.episodeNumber ?? 0) - (b.identity.episodeNumber ?? 0);
+      });
+      return items;
+    } catch {
+      return [];
+    }
   }
 
   async findEpisodeBySeriesTmdb(
@@ -753,6 +807,47 @@ export class DispatcharrProvider implements VodProvider, LiveTvProvider, Acquisi
     this.tmdbCache.clear();
     this.groupsCache = undefined;
     this.channelsCache = undefined;
+  }
+
+  /**
+   * One page of the VOD movie or series catalogue (for background indexing).
+   * Rows without a TMDb id are omitted — Streamerr joins catalogues via TMDb.
+   */
+  async pageVodCatalogue(
+    mediaType: "movie" | "tv",
+    opts?: { page?: number; pageSize?: number },
+  ): Promise<{
+    items: Array<{ id: number; uuid: string; name: string; tmdbId: number }>;
+    count: number;
+    page: number;
+    pageSize: number;
+    /** Raw rows on this page before TMDb filtering (0 ⇒ end of catalogue). */
+    rawCount: number;
+  }> {
+    const page = Math.max(1, opts?.page ?? 1);
+    const pageSize = Math.min(100, Math.max(1, opts?.pageSize ?? 100));
+    return this.withAuthRetry(async (http) => {
+      const path = mediaType === "movie" ? "/api/vod/movies/" : "/api/vod/series/";
+      const schema = mediaType === "movie" ? MoviesPageSchema : SeriesPageSchema;
+      const { data } = await http.request("GET", path, {
+        query: { page, page_size: pageSize },
+        schema,
+      });
+      const rows = data.results ?? [];
+      const items: Array<{ id: number; uuid: string; name: string; tmdbId: number }> = [];
+      for (const row of rows) {
+        const tmdbId = parseTmdbId(row.tmdb_id);
+        if (tmdbId == null) continue;
+        items.push({ id: row.id, uuid: row.uuid, name: row.name, tmdbId });
+      }
+      return {
+        items,
+        count: data.count ?? rows.length,
+        page,
+        pageSize,
+        rawCount: rows.length,
+      };
+    });
   }
 
   /** Used when availability already carries uuid (e.g. from details merge). */

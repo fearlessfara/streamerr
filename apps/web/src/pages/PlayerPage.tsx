@@ -18,6 +18,7 @@ import {
   saveSubtitleOff,
   saveSubtitleTrack,
 } from "../lib/subtitle-pref";
+import { maxSeekableSecondsForSource } from "../lib/seek-cap";
 
 interface LiveChannelRef {
   uuid: string;
@@ -298,8 +299,6 @@ export function PlayerPage() {
    * Takes precedence over Continue Watching `startPositionSeconds`.
    */
   const keepPositionRef = useRef<number | null>(null);
-  /** Detach in-flight HLS scrub snap listener when a newer seek arrives. */
-  const hlsSeekSnapRef = useRef<(() => void) | null>(null);
   const source = state?.source;
   const isLive =
     Boolean(state?.live) ||
@@ -327,6 +326,8 @@ export function PlayerPage() {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [scrubHover, setScrubHover] = useState<number | null>(null);
   const [seeking, setSeeking] = useState(false);
+  /** Waiting for media (initial load, scrub, underrun) — show center spinner. */
+  const [buffering, setBuffering] = useState(true);
   const [liveBehind, setLiveBehind] = useState(0);
   const [subIndex, setSubIndex] = useState<number | null>(null);
   const [subsOpen, setSubsOpen] = useState(false);
@@ -417,7 +418,17 @@ export function PlayerPage() {
   const selectAudioTrack = useCallback(
     (index: number) => {
       if (!source || source.provider !== "jellyfin") return;
-      const identity = state?.identity;
+      // Prefer navigation identity; fall back to itemId so we always re-resolve
+      // PlaybackInfo (Transcode HLS ignores a bare audioStreamIndex query tweak).
+      const identity =
+        state?.identity ??
+        (source.itemId
+          ? { jellyfinItemId: source.itemId, mediaType: "other" as const }
+          : undefined);
+      if (!identity?.jellyfinItemId) {
+        console.warn("[player] audio switch: missing jellyfin item id");
+        return;
+      }
       const v = videoRef.current;
       const position = Math.max(
         0,
@@ -431,6 +442,7 @@ export function PlayerPage() {
 
       setAudioIndex(index);
       setAudioOpen(false);
+      setBuffering(true);
       revealControls(true);
       // Carry playhead across the inevitable stream remount.
       keepPositionRef.current = position > 0 ? position : null;
@@ -438,29 +450,7 @@ export function PlayerPage() {
       currentSecondsRef.current = position;
       setCurrent(position);
 
-      if (!identity) {
-        try {
-          const u = new URL(source.delivery.url, window.location.origin);
-          u.searchParams.set("audioStreamIndex", String(index));
-          navigate("/play", {
-            replace: true,
-            state: {
-              ...state,
-              source: {
-                ...source,
-                delivery: { ...source.delivery, url: `${u.pathname}${u.search}` },
-                startPositionSeconds: position > 0 ? position : source.startPositionSeconds,
-              },
-            } satisfies PlayState,
-          });
-        } catch (err) {
-          console.warn("[player] audio switch failed", err);
-          keepPositionRef.current = null;
-        }
-        return;
-      }
-
-      // Fresh PlaybackInfo so AudioStreamIndex is baked into the HLS session.
+      // Fresh PlaybackInfo so AudioStreamIndex is baked into DirectStream/HLS.
       void resolvePlayback(identity, {
         audioStreamIndex: index,
         startPositionSeconds: position > 0 ? position : undefined,
@@ -469,6 +459,7 @@ export function PlayerPage() {
           if (result.status !== "ready") {
             keepPositionRef.current = null;
             pendingSeekRef.current = null;
+            setBuffering(false);
             return;
           }
           navigate("/play", {
@@ -494,6 +485,7 @@ export function PlayerPage() {
           console.warn("[player] audio switch failed", err);
           keepPositionRef.current = null;
           pendingSeekRef.current = null;
+          setBuffering(false);
         });
     },
     [navigate, revealControls, source, state, subtitleTracksState],
@@ -546,13 +538,14 @@ export function PlayerPage() {
   }, [isLive, revealControls]);
 
   const maxSeekableSeconds = useCallback(() => {
-    if (downloadComplete || knownDuration <= 0) return knownDuration > 0 ? knownDuration : Infinity;
-    if (downloadTotal && downloadTotal > 0 && downloadBytes > 0) {
-      // Keep a margin so remux does not seek past downloaded bytes.
-      return Math.max(0, (downloadBytes / downloadTotal) * knownDuration - 8);
-    }
-    return Math.max(30, knownDuration * 0.05);
-  }, [downloadComplete, downloadBytes, downloadTotal, knownDuration]);
+    return maxSeekableSecondsForSource({
+      provider: source?.provider,
+      downloadComplete,
+      downloadBytes,
+      downloadTotal,
+      knownDuration,
+    });
+  }, [source?.provider, downloadComplete, downloadBytes, downloadTotal, knownDuration]);
 
   const isLiveRef = useRef(isLive);
   const resumeSecondsRef = useRef(source?.startPositionSeconds);
@@ -600,6 +593,7 @@ export function PlayerPage() {
       resumeAppliedRef.current = true;
       pendingSeekRef.current = capped;
       setSeeking(true);
+      setBuffering(true);
       setCurrent(capped);
 
       let seekableStart = 0;
@@ -653,109 +647,16 @@ export function PlayerPage() {
         }
       }
 
-      // Jellyfin HLS: full VOD playlist from t=0. Seek in-session only —
-      // never re-resolve (that re-applies Continue Watching / StartTimeTicks).
+      // Jellyfin HLS: full VOD from t=0. Plain currentTime — let hls.js fetch
+      // the target fragment. Never re-resolve (that re-applies Continue Watching).
       if (isJellyfinHls) {
         remuxBaseRef.current = 0;
         currentSecondsRef.current = capped;
-        // User scrub wins over Continue Watching for stall recovery.
         keepPositionRef.current = null;
-        const hls = hlsRef.current;
-        hlsSeekSnapRef.current?.();
-        hlsSeekSnapRef.current = null;
-
-        const targetInBuffered = (): boolean => {
-          try {
-            for (let i = 0; i < v.buffered.length; i++) {
-              if (capped >= v.buffered.start(i) && capped <= v.buffered.end(i) - 0.25) {
-                return true;
-              }
-            }
-          } catch {
-            /* ignore */
-          }
-          return false;
-        };
-
-        const snapPlayhead = (): boolean => {
-          try {
-            // Only set currentTime when MSE will not clamp us back into the
-            // Continue Watching buffer (seekable often equals buffered until
-            // the target range is loaded).
-            if (targetInBuffered()) {
-              v.currentTime = capped;
-              return true;
-            }
-            const dur = v.duration;
-            if (Number.isFinite(dur) && dur >= capped + 0.5) {
-              let seekableCovers = false;
-              try {
-                if (v.seekable.length > 0) {
-                  seekableCovers =
-                    v.seekable.start(0) <= capped + 0.5 &&
-                    v.seekable.end(v.seekable.length - 1) >= capped - 0.5;
-                }
-              } catch {
-                /* ignore */
-              }
-              if (seekableCovers || targetInBuffered()) {
-                v.currentTime = capped;
-                return true;
-              }
-            }
-          } catch {
-            /* ignore */
-          }
-          return false;
-        };
-
         try {
-          if (!hls) {
-            v.currentTime = capped;
-          } else if (targetInBuffered()) {
-            v.currentTime = capped;
-          } else {
-            // Load the target range FIRST. Setting currentTime while seekable is
-            // still stuck around Continue Watching (~7:00) makes the browser
-            // clamp every scrub back to that minute.
-            hls.stopLoad();
-            hls.startLoad(capped);
-            if (!snapPlayhead()) {
-              const onFrag = () => {
-                if (pendingSeekRef.current != null && Math.abs(pendingSeekRef.current - capped) > 1) {
-                  return;
-                }
-                if (snapPlayhead()) {
-                  hls.off(Hls.Events.FRAG_BUFFERED, onFrag);
-                  hlsSeekSnapRef.current = null;
-                  void v.play().catch(() => revealControls(true));
-                }
-              };
-              hls.on(Hls.Events.FRAG_BUFFERED, onFrag);
-              const timer = window.setTimeout(() => {
-                hls.off(Hls.Events.FRAG_BUFFERED, onFrag);
-                hlsSeekSnapRef.current = null;
-                try {
-                  v.currentTime = capped;
-                } catch {
-                  /* ignore */
-                }
-                void v.play().catch(() => revealControls(true));
-              }, 20_000);
-              hlsSeekSnapRef.current = () => {
-                window.clearTimeout(timer);
-                hls.off(Hls.Events.FRAG_BUFFERED, onFrag);
-              };
-              revealControls();
-              return;
-            }
-          }
+          v.currentTime = capped;
         } catch {
-          try {
-            v.currentTime = capped;
-          } catch {
-            /* ignore */
-          }
+          /* ignore */
         }
         void v.play().catch(() => revealControls(true));
         revealControls();
@@ -1138,12 +1039,11 @@ export function PlayerPage() {
       window.clearTimeout(remuxSeekTimer.current);
       remuxSeekTimer.current = null;
     }
-    hlsSeekSnapRef.current?.();
-    hlsSeekSnapRef.current = null;
     remuxBaseRef.current = 0;
     resumeAppliedRef.current = false;
     progressStartedRef.current = false;
     sourceGenRef.current += 1;
+    setBuffering(true);
     // keepPositionRef (audio remount) may arm pendingSeek. Continue Watching must
     // NOT — stall recovery would keep yanking scrubbers back to ~minute 7.
     const keep = keepPositionRef.current;
@@ -1302,20 +1202,24 @@ export function PlayerPage() {
       player.load();
       startLivePlayback();
     } else if (useHls && Hls.isSupported()) {
-      // Resume after MANIFEST_PARSED via currentTime — do not bake Continue Watching
-      // into config.startPosition (seekToStartPos would yank scrubbers back to it).
+      // Continue Watching once via startPosition (seekToStartPos runs at first
+      // append only — later scrubbing is not restricted).
       const jellyfinHls =
         playMethod === "Transcode" || url.includes("/playback/jellyfin/");
+      const hlsStart =
+        resumeAt > 0 && !resumeAppliedRef.current ? resumeAt : -1;
+      if (hlsStart > 0) {
+        resumeAppliedRef.current = true;
+        setCurrent(hlsStart);
+      }
       const hls = new Hls({
         enableWorker: true,
         // Keep ahead-buffer modest so we do not race Jellyfin's on-demand transcoder.
         maxBufferLength: jellyfinHls ? 18 : 30,
         maxMaxBufferLength: jellyfinHls ? 36 : 60,
         maxBufferSize: 40 * 1000 * 1000,
-        // Never bake Continue Watching into startPosition — hls.js seekToStartPos
-        // would refuse scrubbing earlier than that offset.
-        startPosition: -1,
-        autoStartLoad: resumeAt <= 0,
+        startPosition: hlsStart,
+        autoStartLoad: true,
         fragLoadingTimeOut: 120_000,
         fragLoadingMaxRetry: 6,
         fragLoadingRetryDelay: 1000,
@@ -1331,12 +1235,12 @@ export function PlayerPage() {
       hlsRef.current = hls;
       const loadAtPlayhead = () => {
         const v = videoRef.current;
-        // Prefer pending/user playhead — video.currentTime may still be clamped
-        // to the Continue Watching buffer while a scrub target loads.
+        // Stall recovery: reload around the actual playhead — never Continue Watching.
         let at = -1;
         if (pendingSeekRef.current != null) at = pendingSeekRef.current;
-        else if (currentSecondsRef.current > 0) at = currentSecondsRef.current;
-        else if (v && Number.isFinite(v.currentTime)) at = v.currentTime;
+        else if (v && Number.isFinite(v.currentTime) && v.currentTime > 0) {
+          at = v.currentTime;
+        }
         hls.startLoad(at);
       };
       let fatalRecoveries = 0;
@@ -1363,18 +1267,6 @@ export function PlayerPage() {
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (sourceGenRef.current !== gen) return;
-        if (resumeAt > 0) {
-          resumeAppliedRef.current = true;
-          try {
-            video.currentTime = resumeAt;
-          } catch {
-            /* ignore */
-          }
-          setCurrent(resumeAt);
-          hls.startLoad(resumeAt);
-        } else {
-          applyResumeOnce(video);
-        }
         if (!jellyfinHls) {
           playbackStarted = true;
           void video.play().catch(() => revealControls(true));
@@ -1622,6 +1514,17 @@ export function PlayerPage() {
           liveDriftRef.current.pausedAtWall = null;
           revealControls();
         }}
+        onWaiting={() => {
+          setBuffering(true);
+        }}
+        onPlaying={() => {
+          setBuffering(false);
+          setPaused(false);
+        }}
+        onCanPlay={() => {
+          // Enough data to start; clear spinner unless a scrub is still pending.
+          if (pendingSeekRef.current == null) setBuffering(false);
+        }}
         onPause={() => {
           // Ignore the synthetic pause from remux src teardown / load() during scrub.
           if (pendingSeekRef.current != null || remuxSeekTimer.current != null) return;
@@ -1633,6 +1536,7 @@ export function PlayerPage() {
         }}
         onSeeking={() => {
           setSeeking(true);
+          setBuffering(true);
         }}
         onSeeked={(e) => {
           const absolute = remuxBaseRef.current + e.currentTarget.currentTime;
@@ -1643,6 +1547,9 @@ export function PlayerPage() {
             pendingSeekRef.current = null;
             setSeeking(false);
             setCurrent(absolute);
+            if (e.currentTarget.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+              setBuffering(false);
+            }
           }
         }}
         onTimeUpdate={(e) => {
@@ -1655,6 +1562,9 @@ export function PlayerPage() {
               setSeeking(false);
               currentSecondsRef.current = absolute;
               setCurrent(absolute);
+              if (v.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+                setBuffering(false);
+              }
             }
           } else if (!seeking) {
             currentSecondsRef.current = absolute;
@@ -1719,6 +1629,10 @@ export function PlayerPage() {
           <IconVolume muted level={0} />
           <span>Click to unmute</span>
         </button>
+      ) : buffering && !(paused && !seeking) ? (
+        <div className="player-loading" role="status" aria-live="polite" aria-label="Loading">
+          <span className="player-loading-spinner" aria-hidden="true" />
+        </div>
       ) : paused && controlsVisible ? (
         <button
           type="button"

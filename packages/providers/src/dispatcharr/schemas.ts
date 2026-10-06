@@ -43,7 +43,7 @@ export const DispatcharrEpisodeSchema = z
   .object({
     id: z.number(),
     uuid: z.string(),
-    name: z.string(),
+    name: z.string().nullable().optional(),
     description: z.string().nullable().optional(),
     duration_secs: z.number().nullable().optional(),
     season_number: z.number().nullable().optional(),
@@ -151,6 +151,12 @@ export const DispatcharrProgramSchema = z
   })
   .passthrough();
 
+export const DispatcharrSeriesProviderInfoSchema = z
+  .object({
+    id: z.number().optional(),
+    episodes: z.record(z.string(), z.array(z.unknown())).optional(),
+  })
+  .passthrough();
 export type DispatcharrMovie = z.infer<typeof DispatcharrMovieSchema>;
 export type DispatcharrSeries = z.infer<typeof DispatcharrSeriesSchema>;
 export type DispatcharrEpisode = z.infer<typeof DispatcharrEpisodeSchema>;

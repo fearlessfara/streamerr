@@ -47,6 +47,8 @@ const EnvSchema = z.object({
    * Used to rank EN-/IT- prefixed Dispatcharr VOD variants for the same TMDb id.
    */
   STREAMERR_PREFERRED_LANGUAGES: z.string().default("en"),
+  /** How often to rescan the Dispatcharr VOD catalogue into SQLite (default 12h). */
+  STREAMERR_VOD_SYNC_INTERVAL_MS: z.coerce.number().int().positive().default(12 * 60 * 60 * 1000),
   FFMPEG_PATH: z.string().optional(),
   FFPROBE_PATH: z.string().optional(),
   NODE_ENV: z.string().optional(),

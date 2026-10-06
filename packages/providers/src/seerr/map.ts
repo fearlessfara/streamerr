@@ -8,13 +8,17 @@ import {
   type SeerrMovieDetails,
   type SeerrSearchResult,
   type SeerrTvDetails,
+  type SeerrTvEpisode,
 } from "./schemas.js";
 
 const TMDB_IMG = "https://image.tmdb.org/t/p";
 
-export function tmdbImageUrl(path: string | null | undefined, size: "w500" | "w1280"): string | undefined {
+export function tmdbImageUrl(
+  path: string | null | undefined,
+  size: "w300" | "w500" | "w1280",
+): string | undefined {
   if (!path) return undefined;
-  if (path.startsWith("http")) return path;
+  if (path.startsWith("http")) return path.replace("/original/", `/${size}/`);
   return `${TMDB_IMG}/${size}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
@@ -126,6 +130,40 @@ export function mapTvDetailsToMedia(details: SeerrTvDetails): Media {
       overview: details.overview ?? undefined,
       posterUrl: tmdbImageUrl(details.posterPath, "w500"),
       backdropUrl: tmdbImageUrl(details.backdropPath, "w1280"),
+      runtimeMinutes: details.episodeRunTime?.find((n) => n > 0),
+      genres: details.genres?.map((g) => g.name).filter(Boolean),
+      seriesStatus: details.status || undefined,
+    },
+    availability,
+    preferredAction: resolvePreferredAction(availability),
+  };
+}
+
+/** One TMDb episode row. Playability is filled in later from Jellyfin and IPTV. */
+export function mapSeerrEpisodeToMedia(
+  episode: SeerrTvEpisode,
+  seriesTmdbId: number,
+  seasonNumber: number,
+  seasonStatus?: number,
+): Media {
+  const seerrAvail = mapMediaInfoToRequestAvailability(
+    seasonStatus != null ? { status: seasonStatus } : null,
+  );
+  const availability = [seerrAvail];
+  const episodeNumber = episode.episodeNumber;
+  return {
+    identity: {
+      tmdbId: seriesTmdbId,
+      mediaType: "episode",
+      seasonNumber: episode.seasonNumber ?? seasonNumber,
+      episodeNumber,
+    },
+    metadata: {
+      title: episode.name?.trim() || `Episode ${episodeNumber}`,
+      overview: episode.overview ?? undefined,
+      runtimeMinutes: episode.runtime && episode.runtime > 0 ? episode.runtime : undefined,
+      stillUrl: tmdbImageUrl(episode.stillPath, "w300"),
+      airDate: episode.airDate ?? undefined,
     },
     availability,
     preferredAction: resolvePreferredAction(availability),

@@ -11,6 +11,12 @@ export const MediaMetadataSchema = z.object({
   runtimeMinutes: z.number().optional(),
   /** Exact runtime in seconds when known (preferred over runtimeMinutes * 60). */
   durationSeconds: z.number().nonnegative().optional(),
+  /** Episode still (TMDb) when this row is an episode. */
+  stillUrl: z.string().optional(),
+  airDate: z.string().optional(),
+  genres: z.array(z.string()).optional(),
+  /** TMDb series status, e.g. "Returning Series". */
+  seriesStatus: z.string().optional(),
 });
 export type MediaMetadata = z.infer<typeof MediaMetadataSchema>;
 

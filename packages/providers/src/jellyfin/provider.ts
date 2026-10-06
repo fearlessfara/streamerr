@@ -375,28 +375,49 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
     if (!source) return null;
 
     const playSessionId = data.PlaySessionId;
-    const playMethod = resolvePlayMethodForBrowser(source);
+    let playMethod = resolvePlayMethodForBrowser(source);
+    const requestedAudio = opts?.audioStreamIndex;
+    const defaultAudio = source.DefaultAudioStreamIndex ?? undefined;
+    // DirectPlay streams the full file; browsers pick their own default audio and
+    // ignore AudioStreamIndex on static URLs. Force remux/transcode when the user
+    // selects a non-default track so Jellyfin emits only that stream.
+    if (
+      requestedAudio != null &&
+      playMethod === "DirectPlay" &&
+      (defaultAudio == null || requestedAudio !== defaultAudio)
+    ) {
+      const hlsAvailable =
+        source.TranscodingSubProtocol === "hls" ||
+        Boolean(source.TranscodingUrl?.includes(".m3u8"));
+      if (hlsAvailable) playMethod = "Transcode";
+      else if (source.SupportsDirectStream || source.SupportsTranscoding) {
+        playMethod = "DirectStream";
+      }
+    }
     const isHls =
-      playMethod === "Transcode" ||
-      source.TranscodingSubProtocol === "hls" ||
-      Boolean(source.TranscodingUrl?.includes(".m3u8"));
+      playMethod === "Transcode" &&
+      (source.TranscodingSubProtocol === "hls" ||
+        Boolean(source.TranscodingUrl?.includes(".m3u8")));
 
     const params = new URLSearchParams({
       mediaSourceId: source.Id,
       playMethod,
     });
     if (playSessionId) params.set("playSessionId", playSessionId);
-    const audioIndex = opts?.audioStreamIndex ?? source.DefaultAudioStreamIndex;
+    const audioIndex = requestedAudio ?? source.DefaultAudioStreamIndex;
     if (audioIndex != null) {
       params.set("audioStreamIndex", String(audioIndex));
     }
-    if (source.TranscodingUrl) {
+    if (source.TranscodingUrl && isHls) {
       const relative = normalizeJellyfinRelativePath(source.TranscodingUrl, this.baseUrl);
       // Strip any StartTimeTicks Jellyfin echoed — full VOD playlist + client seek only.
       if (relative) {
         try {
           const u = new URL(relative, "http://jellyfin.local");
           u.searchParams.delete("StartTimeTicks");
+          if (audioIndex != null) {
+            u.searchParams.set("AudioStreamIndex", String(audioIndex));
+          }
           params.set("transcodingPath", `${u.pathname}${u.search}`);
         } catch {
           params.set("transcodingPath", relative);

@@ -266,8 +266,25 @@ export class PlaybackResolver {
         yearHint = details?.metadata.year;
         seerrDuration = metadataDurationSeconds(details);
       }
+      const preferredLanguages =
+        this.dispatcharr instanceof DispatcharrProvider
+          ? this.dispatcharr.getPreferredLanguages()
+          : undefined;
+      const indexed =
+        this.db != null
+          ? lookupDispatcharrIndex(
+              this.db,
+              identity.tmdbId,
+              identity.mediaType,
+              preferredLanguages,
+            )
+          : null;
       const media = await this.dispatcharr
-        .findVodByTmdb(identity.tmdbId, identity.mediaType, { titleHint, yearHint })
+        .findVodByTmdb(identity.tmdbId, identity.mediaType, {
+          titleHint,
+          yearHint,
+          ...(indexed?.dispatcharrId != null ? { dispatcharrId: indexed.dispatcharrId } : {}),
+        })
         .catch(() => null);
       const fromMedia = acquisitionFromMedia(media, identity.mediaType === "tv" ? "series" : "movie");
       if (!fromMedia) return null;

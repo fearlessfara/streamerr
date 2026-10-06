@@ -10,6 +10,8 @@ export const EpisodeListItemSchema = z.object({
   seasonNumber: z.number().int().nonnegative(),
   episodeNumber: z.number().int().nonnegative(),
   runtimeMinutes: z.number().optional(),
+  stillUrl: z.string().optional(),
+  airDate: z.string().optional(),
   availability: z.array(AvailabilitySchema),
   preferredAction: PreferredActionSchema,
 });

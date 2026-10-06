@@ -8,6 +8,8 @@ export interface MediaCardProps {
   meta?: string;
   posterUrl?: string;
   progress?: number;
+  /** Small status chip on the poster (e.g. Download, Requested). */
+  badge?: string;
   canPlay?: boolean;
   onSelect: () => void;
   onPlay?: () => void;
@@ -22,6 +24,7 @@ export function MediaCard({
   meta,
   posterUrl,
   progress,
+  badge,
   canPlay = true,
   onSelect,
   onPlay,
@@ -59,6 +62,7 @@ export function MediaCard({
         style={posterUrl ? { backgroundImage: `url(${posterUrl})` } : undefined}
       >
         {!posterUrl ? <span className="se-card-placeholder">{title.slice(0, 1)}</span> : null}
+        {badge ? <span className="se-card-badge">{badge}</span> : null}
         {showProgress ? (
           <div className="se-card-progress">
             <span style={{ width: `${Math.round(progress! * 100)}%` }} />

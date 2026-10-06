@@ -753,7 +753,7 @@
 
 .episode-section {
   margin-top: 2rem;
-  max-width: 720px;
+  max-width: 860px;
 }
 
 .episode-section-head {
@@ -812,9 +812,9 @@
 .episode-row {
   width: 100%;
   display: grid;
-  grid-template-columns: 3rem minmax(0, 1fr) auto;
-  gap: 0.75rem;
-  align-items: center;
+  grid-template-columns: 8.5rem minmax(0, 1fr) auto;
+  gap: 0.85rem;
+  align-items: start;
   text-align: left;
   appearance: none;
   border: 0;
@@ -824,6 +824,14 @@
   padding: 0.7rem 0.85rem;
   font: inherit;
   cursor: pointer;
+}
+
+.episode-still {
+  width: 8.5rem;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .episode-dl-btn {
@@ -851,8 +859,11 @@
 }
 
 .episode-row:disabled {
-  opacity: 0.55;
   cursor: default;
+}
+
+.episode-row:disabled .episode-play {
+  opacity: 0.7;
 }
 
 .episode-num {
@@ -869,10 +880,17 @@
 }
 
 .episode-title {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   font-weight: 600;
+}
+
+.episode-overview {
+  color: var(--se-text-muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .episode-runtime {
@@ -1100,6 +1118,38 @@ button.player-live-badge:hover {
   width: 40px;
   height: 40px;
   margin-left: 3px;
+}
+
+.player-loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+
+.player-loading-spinner {
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: player-spin 0.7s linear infinite;
+}
+
+@keyframes player-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .player-unmute-cta {

@@ -27,7 +27,12 @@ export {
   type DispatcharrAuth,
 } from "./dispatcharr/provider.js";
 export type { CloudflareAccessServiceToken } from "./dispatcharr/auth.js";
-export { mapMovieToMedia, mapSeriesToMedia, tmdbMatches } from "./dispatcharr/map.js";
+export {
+  mapMovieToMedia,
+  mapSeriesToMedia,
+  parseTmdbId,
+  tmdbMatches,
+} from "./dispatcharr/map.js";
 export { MockJellyfinProvider } from "./mocks/mock-jellyfin.js";
 export { MockSeerrProvider } from "./mocks/mock-seerr.js";
 export { MockDispatcharrProvider } from "./mocks/mock-dispatcharr.js";

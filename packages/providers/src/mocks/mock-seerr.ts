@@ -48,11 +48,13 @@ export class MockSeerrProvider implements DiscoveryProvider, RequestProvider {
     return [withAction(requestableMovie), withAction(trendingTv), withAction(popularMovie)];
   }
 
-  async discoverMovies(): Promise<Media[]> {
+  async discoverMovies(opts?: { page?: number; genreId?: number }): Promise<Media[]> {
+    void opts;
     return [withAction(popularMovie), withAction(requestableMovie)];
   }
 
-  async discoverTv(): Promise<Media[]> {
+  async discoverTv(opts?: { page?: number; genreId?: number }): Promise<Media[]> {
+    void opts;
     return [withAction(trendingTv)];
   }
 
@@ -62,6 +64,20 @@ export class MockSeerrProvider implements DiscoveryProvider, RequestProvider {
     return [requestableMovie, popularMovie, trendingTv]
       .map(withAction)
       .filter((m) => m.metadata.title.toLowerCase().includes(q) || q.length < 2);
+  }
+
+  async listTvEpisodes(tmdbId: number): Promise<Media[]> {
+    return [1, 2].map((episodeNumber) =>
+      withAction({
+        identity: { tmdbId, mediaType: "episode", seasonNumber: 1, episodeNumber },
+        metadata: {
+          title: `Episode ${episodeNumber}`,
+          overview: "Mock Seerr episode",
+        },
+        availability: [{ provider: "seerr", requestable: true, mediaStatus: "UNKNOWN" }],
+        preferredAction: "NONE",
+      }),
+    );
   }
 
   async getDetails(mediaType: "movie" | "tv", tmdbId: number): Promise<Media | null> {

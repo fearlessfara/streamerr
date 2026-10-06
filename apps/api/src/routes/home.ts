@@ -6,6 +6,7 @@ import type { AppContext } from "../context.js";
 import { requireAuth } from "../plugins/auth.js";
 import { jellyfinTmdbIndex } from "../db/schema.js";
 import { IptvProgressStore } from "../services/iptv-progress.js";
+import { buildHomeDiscoveryRails } from "../services/catalog-rails.js";
 
 /** Prefer a real next episode from Dispatcharr/Jellyfin catalogues (handles season wrap). */
 async function refineIptvNextUp(
@@ -93,11 +94,11 @@ export async function registerHomeRoutes(app: FastifyInstance, ctx: AppContext):
   app.get("/api/home", async (req) => {
     const { userContext, session } = await requireAuth(req);
 
-    const [continueWatching, nextUp, recentlyAdded, trending] = await Promise.all([
+    const [continueWatching, nextUp, recentlyAdded, discoveryRails] = await Promise.all([
       ctx.jellyfin.getContinueWatching(userContext).catch(() => []),
       ctx.jellyfin.getNextUp(userContext).catch(() => []),
       ctx.jellyfin.getRecentlyAdded(userContext).catch(() => []),
-      ctx.seerr.discoverTrending({ page: 1 }).catch(() => []),
+      buildHomeDiscoveryRails(ctx),
     ]);
     const iptvContinue = iptvProgress.listContinue(session.jellyfinUserId);
     const iptvNextUpRaw = iptvProgress.listNextUp(session.jellyfinUserId);
@@ -130,7 +131,14 @@ export async function registerHomeRoutes(app: FastifyInstance, ctx: AppContext):
     }
 
     // Prefer Jellyfin CW, then append IPTV resumes for different titles/episodes.
-    const continueKey = (m: { identity: { tmdbId?: number; mediaType: string; seasonNumber?: number; episodeNumber?: number } }) => {
+    const continueKey = (m: {
+      identity: {
+        tmdbId?: number;
+        mediaType: string;
+        seasonNumber?: number;
+        episodeNumber?: number;
+      };
+    }) => {
       const id = m.identity;
       if (id.mediaType === "episode") {
         return `ep:${id.tmdbId ?? ""}:${id.seasonNumber ?? ""}:${id.episodeNumber ?? ""}`;
@@ -157,13 +165,14 @@ export async function registerHomeRoutes(app: FastifyInstance, ctx: AppContext):
       }),
     ];
 
+    const personal = [
+      { id: "continue", title: "Continue Watching", items: mergedContinue },
+      { id: "nextup", title: "Next Up", items: mergedNextUp },
+      { id: "recent", title: "Recently Added", items: recentlyAdded },
+    ].filter((row) => row.items.length > 0);
+
     return {
-      rows: [
-        { id: "continue", title: "Continue Watching", items: mergedContinue },
-        { id: "nextup", title: "Next Up", items: mergedNextUp },
-        { id: "recent", title: "Recently Added", items: recentlyAdded },
-        { id: "trending", title: "Trending", items: trending },
-      ],
+      rows: [...personal, ...discoveryRails],
     };
   });
 }

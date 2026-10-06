@@ -82,12 +82,25 @@ export function seriesEpisodes(tmdbId: number) {
   }>(`/api/media/tv/${tmdbId}/episodes`);
 }
 
-export function discoverMovies(page = 1) {
-  return request<{ items: Media[] }>(`/api/discover/movies?page=${page}`);
+export function discoverMovies(page = 1, opts?: { genreId?: number }) {
+  const qs = new URLSearchParams({ page: String(page) });
+  if (opts?.genreId != null) qs.set("genreId", String(opts.genreId));
+  return request<{ items: Media[] }>(`/api/discover/movies?${qs}`);
 }
 
-export function discoverTv(page = 1) {
-  return request<{ items: Media[] }>(`/api/discover/tv?page=${page}`);
+export function discoverTv(page = 1, opts?: { genreId?: number }) {
+  const qs = new URLSearchParams({ page: String(page) });
+  if (opts?.genreId != null) qs.set("genreId", String(opts.genreId));
+  return request<{ items: Media[] }>(`/api/discover/tv?${qs}`);
+}
+
+export function catalogRails(mediaType: "movie" | "tv", opts?: { search?: string }) {
+  const qs = new URLSearchParams();
+  if (opts?.search) qs.set("search", opts.search);
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<{ rows: Array<{ id: string; title: string; items: Media[] }> }>(
+    `/api/catalog/${mediaType}${suffix}`,
+  );
 }
 
 export function searchMedia(q: string, page = 1) {

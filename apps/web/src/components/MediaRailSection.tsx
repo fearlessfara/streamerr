@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { MediaCard, Rail } from "@streamerr/ui";
 import type { Media } from "@streamerr/shared";
 import { resolvePlaybackForPlay } from "../lib/api";
-import { canPlayMedia, formatRuntime, mediaHref } from "../lib/media";
+import { canPlayMedia, cardBadge, formatRuntime, mediaHref } from "../lib/media";
 
 export function MediaRailSection({
   id,
@@ -89,7 +89,9 @@ export function MediaRailSection({
             (item.identity.tmdbId !== undefined
               ? `${item.identity.mediaType}-${item.identity.tmdbId}`
               : `${id}-${itemIndex}`);
-          const playable = canPlayMedia(item);
+          // Series play is episode-level — open details instead of starting playback.
+          const playable = canPlayMedia(item) && item.identity.mediaType !== "tv";
+          const badge = cardBadge(item);
           const open = () => {
             if (href) navigate(href);
           };
@@ -102,6 +104,7 @@ export function MediaRailSection({
               meta={formatRuntime(item.metadata.runtimeMinutes) ?? undefined}
               posterUrl={item.metadata.backdropUrl || item.metadata.posterUrl}
               progress={progress}
+              badge={badge}
               canPlay={playable}
               autoFocus={autoFocusFirst && itemIndex === 0}
               onSelect={open}
