@@ -1,39 +1,36 @@
 import { useWindowDimensions } from "react-native";
+import { FOCUS_ROOM } from "@streamerr/native-ui";
 
 function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }
 
-/** Screen-driven sizes so ~2–3 rails fit in the viewport like Netflix on TV. */
+/** Netflix TV proportions — tall billboard, room for focus-scale rails. */
 export function useTvLayout() {
   const { width, height } = useWindowDimensions();
 
-  const headerH = Math.round(clamp(height * 0.065, 52, 64));
-  const pageX = Math.round(clamp(width * 0.025, 28, 48));
+  const headerH = Math.round(clamp(height * 0.07, 56, 72));
+  const pageX = Math.round(clamp(width * 0.04, 36, 60));
 
-  // ~6 cards across on 1080p so rails stay short enough for 2–3 on screen.
-  const cardsAcross = width >= 1800 ? 6.2 : width >= 1400 ? 5.6 : width >= 1100 ? 5.0 : 4.0;
-  const cardGap = Math.round(clamp(width * 0.007, 8, 12));
+  const cardsAcross = width >= 1800 ? 6.2 : width >= 1400 ? 5.6 : width >= 1100 ? 5.0 : 4.2;
+  const cardGap = Math.round(clamp(width * 0.01, 10, 16));
   const cardWidth = Math.round(
     (width - pageX * 2 - cardGap * Math.floor(cardsAcross)) / cardsAcross,
   );
   const posterH = Math.round((cardWidth * 9) / 16);
-  const titleSize = Math.round(clamp(cardWidth * 0.052, 12, 15));
-  const metaSize = Math.round(clamp(cardWidth * 0.045, 11, 13));
+  const titleSize = Math.round(clamp(cardWidth * 0.055, 13, 16));
+  const metaSize = Math.round(clamp(cardWidth * 0.045, 12, 14));
   const titleLine = titleSize + 3;
   const metaLine = metaSize + 3;
   const cardTextGap = 4;
   const cardH = posterH + cardTextGap + titleLine + metaLine;
-  const railTitleSize = Math.round(clamp(height * 0.016, 15, 18));
-  const railTitleH = railTitleSize + 8;
-  const railGap = Math.round(clamp(height * 0.012, 8, 14));
-  const railListH = cardH + 2;
-
-  // Billboard sized so two full rails sit under it on this panel.
-  const contentH = height - headerH;
-  const twoRails = railTitleH + railListH + railGap + railTitleH + railListH;
-  const maxHero = Math.max(140, contentH - twoRails - railTitleH - 20);
-  const heroH = Math.round(clamp(height * 0.2, 140, Math.min(maxHero, 220)));
+  const railTitleSize = 18;
+  const railTitleH = 26;
+  const railGap = Math.round(clamp(height * 0.028, 24, 36));
+  // Focus-scale cards: no captions; leave FOCUS_ROOM under the poster.
+  const railListH = posterH + FOCUS_ROOM;
+  const heroH = Math.round(clamp(height * 0.55, 360, 560));
+  const gridColumns = width >= 1600 ? 6 : width >= 1200 ? 5 : 4;
 
   return {
     width,
@@ -54,7 +51,8 @@ export function useTvLayout() {
     railGap,
     railListH,
     heroH,
-    artMaxWidth: Math.min(640, cardWidth * 2),
+    gridColumns,
+    artMaxWidth: Math.min(960, cardWidth * 2),
   };
 }
 

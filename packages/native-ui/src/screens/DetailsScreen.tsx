@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  type StyleProp,
+  type TextStyle,
+  type ViewStyle,
+} from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CreditPerson, EpisodeListItem, Media } from "@streamerr/shared";
 import {
@@ -11,34 +21,190 @@ import {
   mediaAvailability,
   mediaByJellyfin,
   mediaByTmdb,
+  mediaSimilar,
+  myListHas,
   promoteAcquisition,
   requestMedia,
   resolvePlaybackForPlay,
   seriesEpisodes,
+  toggleMyList,
 } from "@streamerr/client";
 import { Artwork } from "../Artwork.js";
 import { Button, PillButton } from "../Button.js";
 import { HScroll } from "../HScroll.js";
 import { PlayIcon } from "../icons.js";
+import { MediaRail } from "../MediaRail.js";
+import { NfBackIcon } from "../player/PlayerIcons.js";
 import { DetailsSkeleton } from "../Skeleton.js";
 import { colors } from "../theme.js";
 import type { NativeLayout } from "../layout.js";
-import { mediaFromDetailsSeed, type DetailsParams } from "../media-nav.js";
-import { webGradient } from "../webStyle.js";
+import { mediaFromDetailsSeed, openMedia, type DetailsParams } from "../media-nav.js";
+import { Shade } from "../Shade.js";
 import type { Appearance, ScreenNav } from "./types.js";
 
-/** Web episode thumbnail — play icon overlays the still on hover. */
-function EpisodeStillThumb({ url, onPress }: { url?: string; onPress: () => void }) {
+function namesList(people: CreditPerson[] | undefined, max = 3): string | undefined {
+  if (!people?.length) return undefined;
+  const names = people.map((p) => p.name).filter(Boolean);
+  if (!names.length) return undefined;
+  if (names.length <= max) return names.join(", ");
+  return `${names.slice(0, max).join(", ")}, more`;
+}
+
+function MediaFacts({
+  media,
+  isTv,
+  factStyle,
+  labelStyle,
+  style,
+}: {
+  media: Media;
+  isTv: boolean;
+  factStyle: StyleProp<TextStyle>;
+  labelStyle: StyleProp<TextStyle>;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const cast = namesList(media.metadata.cast);
+  const creators = namesList(media.metadata.creators, 4);
+  const writers = namesList(media.metadata.writers, 3);
+  const genres = media.metadata.genres?.length ? media.metadata.genres.join(", ") : undefined;
+  const studios = media.metadata.studios?.length ? media.metadata.studios.join(", ") : undefined;
+  const keywords = media.metadata.keywords?.length
+    ? media.metadata.keywords.slice(0, 6).join(", ")
+    : undefined;
+  if (!cast && !creators && !writers && !genres && !studios && !keywords) return null;
+  return (
+    <View style={style}>
+      {cast ? (
+        <Text style={factStyle}>
+          <Text style={labelStyle}>Cast: </Text>
+          {cast}
+        </Text>
+      ) : null}
+      {creators ? (
+        <Text style={factStyle}>
+          <Text style={labelStyle}>{isTv ? "Creators: " : "Director: "}</Text>
+          {creators}
+        </Text>
+      ) : null}
+      {writers ? (
+        <Text style={factStyle}>
+          <Text style={labelStyle}>Writers: </Text>
+          {writers}
+        </Text>
+      ) : null}
+      {genres ? (
+        <Text style={factStyle}>
+          <Text style={labelStyle}>Genres: </Text>
+          {genres}
+        </Text>
+      ) : null}
+      {studios ? (
+        <Text style={factStyle}>
+          <Text style={labelStyle}>Studios: </Text>
+          {studios}
+        </Text>
+      ) : null}
+      {keywords ? (
+        <Text style={factStyle}>
+          <Text style={labelStyle}>{isTv ? "This show is: " : "This movie is: "}</Text>
+          {keywords}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function CastCrewCarousel({
+  cast,
+  creators,
+  isTv,
+  titleStyle,
+}: {
+  cast?: CreditPerson[];
+  creators?: CreditPerson[];
+  isTv: boolean;
+  titleStyle?: StyleProp<TextStyle>;
+}) {
+  if (!cast?.length && !creators?.length) return null;
+  return (
+    <View style={styles.castSection}>
+      <Text style={titleStyle ?? styles.webSection}>Cast & Crew</Text>
+      <HScroll>
+        {(cast ?? []).map((person) => (
+          <View
+            key={`${person.tmdbId ?? person.name}-${person.role ?? ""}`}
+            style={styles.castCard}
+          >
+            {person.profileUrl ? (
+              <Artwork url={person.profileUrl} maxWidth={240} style={styles.castPhoto} />
+            ) : (
+              <View style={[styles.castPhoto, styles.castPhotoEmpty]}>
+                <Text style={styles.castInitial}>
+                  {(person.name.trim()[0] || "?").toUpperCase()}
+                </Text>
+              </View>
+            )}
+            <Text style={styles.castName} numberOfLines={2}>
+              {person.name}
+            </Text>
+            {person.role ? (
+              <Text style={styles.castRole} numberOfLines={2}>
+                as {person.role}
+              </Text>
+            ) : null}
+          </View>
+        ))}
+        {(creators ?? []).map((person) => (
+          <View
+            key={`crew-${person.tmdbId ?? person.name}-${person.role ?? ""}`}
+            style={styles.castCard}
+          >
+            {person.profileUrl ? (
+              <Artwork url={person.profileUrl} maxWidth={240} style={styles.castPhoto} />
+            ) : (
+              <View style={[styles.castPhoto, styles.castPhotoEmpty]}>
+                <Text style={styles.castInitial}>
+                  {(person.name.trim()[0] || "?").toUpperCase()}
+                </Text>
+              </View>
+            )}
+            <Text style={styles.castName} numberOfLines={2}>
+              {person.name}
+            </Text>
+            <Text style={styles.castRole} numberOfLines={2}>
+              {person.role || (isTv ? "Creator" : "Director")}
+            </Text>
+          </View>
+        ))}
+      </HScroll>
+    </View>
+  );
+}
+
+/** Episode thumbnail — play icon on hover (web) or TV focus. */
+function EpisodeStillThumb({
+  url,
+  onPress,
+  showFocusRing = false,
+}: {
+  url?: string;
+  onPress: () => void;
+  showFocusRing?: boolean;
+}) {
   const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const hot = hovered || focused;
   return (
     <Pressable
-      style={styles.epStillWrap}
+      style={[styles.epStillWrap, focused && styles.epStillFocused]}
       onPress={onPress}
       onHoverIn={() => setHovered(true)}
       onHoverOut={() => setHovered(false)}
+      onFocus={showFocusRing ? () => setFocused(true) : undefined}
+      onBlur={showFocusRing ? () => setFocused(false) : undefined}
     >
       <Artwork url={url} maxWidth={320} style={styles.epStill} />
-      {hovered ? (
+      {hot ? (
         <View style={styles.epStillOverlay}>
           <View style={styles.epPlayCircle}>
             <PlayIcon color="#fff" size={22} />
@@ -138,6 +304,39 @@ export function DetailsScreen({
     enabled: Boolean(isTv && seriesTmdbId),
   });
 
+  const similarType: "movie" | "tv" | null =
+    media?.identity.mediaType === "movie" || type === "movie"
+      ? "movie"
+      : media?.identity.mediaType === "tv" || type === "tv" || isTv
+        ? "tv"
+        : null;
+  const similarTmdb = media?.identity.tmdbId ?? tmdbId ?? seed?.tmdbId;
+  const similarQuery = useQuery({
+    queryKey: ["media", "similar", similarType, similarTmdb],
+    queryFn: () => mediaSimilar(similarType!, similarTmdb!),
+    enabled: Boolean(web && similarType && similarTmdb),
+  });
+
+  const listType: "movie" | "tv" | null =
+    media?.identity.mediaType === "movie"
+      ? "movie"
+      : media?.identity.mediaType === "tv" || isTv
+        ? "tv"
+        : similarType;
+  const listTmdb = media?.identity.tmdbId ?? similarTmdb;
+  const onListQuery = useQuery({
+    queryKey: ["mylist", "has", listType, listTmdb],
+    queryFn: () => myListHas(listType!, listTmdb!),
+    enabled: Boolean(listType && listTmdb),
+  });
+  const toggleList = useMutation({
+    mutationFn: () => toggleMyList(listType!, listTmdb!),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["mylist"] });
+      void qc.invalidateQueries({ queryKey: ["home"] });
+    },
+  });
+
   const seasons = useMemo(() => {
     const raw = episodesQuery.data?.seasons ?? [];
     // Prefer regular seasons first; keep specials (0) at the end.
@@ -163,14 +362,6 @@ export function DetailsScreen({
 
   function seasonLabel(s: number) {
     return s === 0 ? "Specials" : `Season ${s}`;
-  }
-
-  function namesList(people: CreditPerson[] | undefined, max = 3): string | undefined {
-    if (!people?.length) return undefined;
-    const names = people.map((p) => p.name).filter(Boolean);
-    if (!names.length) return undefined;
-    if (names.length <= max) return names.join(", ");
-    return `${names.slice(0, max).join(", ")}, more`;
   }
 
   /** In-progress episode (IPTV or Jellyfin) — Netflix Resume under the series title. */
@@ -288,7 +479,7 @@ export function DetailsScreen({
   const showRequest = Boolean(media && !iptvResolving && media.preferredAction === "REQUEST");
 
   useEffect(() => {
-    if (!web) return;
+    if (!web || Platform.OS !== "web") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") nav.goBack?.();
     };
@@ -296,77 +487,154 @@ export function DetailsScreen({
     return () => window.removeEventListener("keydown", onKey);
   }, [web, nav]);
 
-  const episodesBlock = isTv ? (
-    <View style={styles.seasons}>
-      <Text style={web ? styles.webSection : styles.title}>Episodes</Text>
-      {episodesQuery.isPending ? (
-        <Text style={web ? styles.epOverview : styles.meta}>Loading episodes…</Text>
-      ) : null}
-      {episodesQuery.isError ? (
-        <Text style={styles.error}>{(episodesQuery.error as Error).message || "Could not load episodes."}</Text>
-      ) : null}
-      {episodesQuery.isSuccess && seasons.length === 0 ? (
-        <Text style={web ? styles.epOverview : styles.meta}>No episodes found for this series.</Text>
-      ) : null}
-      {seasons.length > 0 ? (
-        <HScroll style={styles.seasonRow}>
-          {seasons.map((s) =>
-            web ? (
-              <Pressable
-                key={s}
-                onPress={() => setSeason(s)}
-                style={[styles.seasonPill, season === s && styles.seasonPillOn]}
-              >
-                <Text style={[styles.seasonPillText, season === s && styles.seasonPillTextOn]}>
-                  {seasonLabel(s)}
-                </Text>
-              </Pressable>
-            ) : (
-              <Button
-                key={s}
-                label={s === 0 ? "Specials" : `S${s}`}
-                variant={season === s ? "primary" : "ghost"}
+  function episodeRuntime(minutes?: number) {
+    if (minutes == null || !(minutes > 0)) return null;
+    return formatRuntime(minutes);
+  }
+
+  /** Netflix: series get a season picker + episode rows; movies get one episode-style row. */
+  const episodesBlock = (() => {
+    if (!media) return null;
+
+    if (!isTv) {
+      const runtime = episodeRuntime(media.metadata.runtimeMinutes);
+      const stillUrl = media.metadata.backdropUrl || media.metadata.posterUrl;
+      if (web) {
+        return (
+          <View style={styles.seasons}>
+            <Pressable
+              onPress={() => play.mutate()}
+              disabled={iptvResolving || play.isPending}
+              style={({ pressed }) => [styles.epRow, pressed && styles.episodePressed]}
+            >
+              <EpisodeStillThumb
+                url={stillUrl}
+                onPress={() => play.mutate()}
                 showFocusRing={tv}
-                onPress={() => setSeason(s)}
-                style={{ marginRight: 8 }}
               />
-            ),
-          )}
-        </HScroll>
-      ) : null}
-      {seasonEpisodes.map((ep) =>
-        web ? (
-          <Pressable
-            key={`${ep.seasonNumber}-${ep.episodeNumber}`}
-            onPress={() => playEpisode.mutate(ep)}
-            style={({ pressed }) => [styles.epRow, pressed && styles.episodePressed]}
-          >
-            <EpisodeStillThumb url={ep.stillUrl} onPress={() => playEpisode.mutate(ep)} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.episodeTitle}>
-                {ep.episodeNumber}. {ep.title}
-              </Text>
+              <View style={{ flex: 1 }}>
+                <View style={styles.epTitleRow}>
+                  <Text style={[styles.episodeTitle, { flex: 1 }]} numberOfLines={1}>
+                    {media.metadata.title}
+                  </Text>
+                  {runtime ? <Text style={styles.epRuntime}>{runtime}</Text> : null}
+                </View>
+                {media.metadata.overview ? (
+                  <Text style={styles.epOverview} numberOfLines={3}>
+                    {media.metadata.overview}
+                  </Text>
+                ) : null}
+              </View>
+            </Pressable>
+          </View>
+        );
+      }
+      // Native movies: synopsis + facts sit above; skip the duplicate episode-style row.
+      return null;
+    }
+
+    return (
+      <View style={styles.seasons}>
+        <Text style={web ? styles.webSection : styles.title}>Episodes</Text>
+        {episodesQuery.isPending ? (
+          <Text style={web ? styles.epOverview : styles.meta}>Loading episodes…</Text>
+        ) : null}
+        {episodesQuery.isError ? (
+          <Text style={styles.error}>
+            {(episodesQuery.error as Error).message || "Could not load episodes."}
+          </Text>
+        ) : null}
+        {episodesQuery.isSuccess && seasons.length === 0 ? (
+          <Text style={web ? styles.epOverview : styles.meta}>No episodes found for this series.</Text>
+        ) : null}
+        {seasons.length > 0 ? (
+          <HScroll style={styles.seasonRow}>
+            {seasons.map((s) =>
+              web ? (
+                <Pressable
+                  key={s}
+                  onPress={() => setSeason(s)}
+                  style={(state) => [
+                    styles.seasonPill,
+                    season === s && styles.seasonPillOn,
+                    tv && state.focused && styles.seasonPillFocused,
+                  ]}
+                >
+                  {(state) => (
+                    <Text
+                      style={[
+                        styles.seasonPillText,
+                        season === s && styles.seasonPillTextOn,
+                        tv && state.focused && styles.seasonPillTextFocused,
+                      ]}
+                    >
+                      {seasonLabel(s)}
+                    </Text>
+                  )}
+                </Pressable>
+              ) : (
+                <Button
+                  key={s}
+                  label={s === 0 ? "Specials" : `S${s}`}
+                  variant={season === s ? "primary" : "ghost"}
+                  showFocusRing={tv}
+                  onPress={() => setSeason(s)}
+                  style={{ marginRight: 8 }}
+                />
+              ),
+            )}
+          </HScroll>
+        ) : null}
+        {seasonEpisodes.map((ep) => {
+          const runtime = episodeRuntime(ep.runtimeMinutes);
+          return web ? (
+            <Pressable
+              key={`${ep.seasonNumber}-${ep.episodeNumber}`}
+              onPress={() => playEpisode.mutate(ep)}
+              style={({ pressed }) => [styles.epRow, pressed && styles.episodePressed]}
+            >
+              <EpisodeStillThumb
+                url={ep.stillUrl}
+                onPress={() => playEpisode.mutate(ep)}
+                showFocusRing={tv}
+              />
+              <View style={{ flex: 1 }}>
+                <View style={styles.epTitleRow}>
+                  <Text style={[styles.episodeTitle, { flex: 1 }]} numberOfLines={1}>
+                    {ep.episodeNumber}. {ep.title}
+                  </Text>
+                  {runtime ? <Text style={styles.epRuntime}>{runtime}</Text> : null}
+                </View>
+                {ep.overview ? (
+                  <Text style={styles.epOverview} numberOfLines={2}>
+                    {ep.overview}
+                  </Text>
+                ) : null}
+              </View>
+            </Pressable>
+          ) : (
+            <Pressable
+              key={`${ep.seasonNumber}-${ep.episodeNumber}`}
+              onPress={() => playEpisode.mutate(ep)}
+              style={({ pressed }) => [styles.episode, pressed && styles.episodePressed]}
+            >
+              <View style={styles.epTitleRow}>
+                <Text style={[styles.episodeTitle, { flex: 1 }]} numberOfLines={1}>
+                  {ep.seasonNumber}x{String(ep.episodeNumber).padStart(2, "0")}  {ep.title}
+                </Text>
+                {runtime ? <Text style={styles.epRuntime}>{runtime}</Text> : null}
+              </View>
               {ep.overview ? (
                 <Text style={styles.epOverview} numberOfLines={2}>
                   {ep.overview}
                 </Text>
               ) : null}
-            </View>
-          </Pressable>
-        ) : (
-          <Pressable
-            key={`${ep.seasonNumber}-${ep.episodeNumber}`}
-            onPress={() => playEpisode.mutate(ep)}
-            style={({ pressed }) => [styles.episode, pressed && styles.episodePressed]}
-          >
-            <Text style={styles.episodeTitle}>
-              {ep.seasonNumber}x{String(ep.episodeNumber).padStart(2, "0")}  {ep.title}
-            </Text>
-          </Pressable>
-        ),
-      )}
-    </View>
-  ) : null;
+            </Pressable>
+          );
+        })}
+      </View>
+    );
+  })();
 
   if (web && layout) {
     const vw = layout.width ?? 1200;
@@ -401,19 +669,18 @@ export function DetailsScreen({
                     maxWidth={1200}
                     style={styles.webBackdrop}
                   />
-                  <View
-                    style={[
-                      styles.webShade,
-                      webGradient(
-                        "linear-gradient(180deg, transparent 35%, rgba(24,24,24,0.9) 72%, #181818 100%)",
-                      ),
-                    ]}
-                  />
+                  <Shade kind="details-bottom" style={styles.webShade} />
                   <View style={{ paddingHorizontal: 28, paddingBottom: 18, maxWidth: 640, zIndex: 2 }}>
                     <Text style={styles.modalTitle}>{media.metadata.title}</Text>
                     <View style={styles.webActions}>
                       {showRequest ? (
-                        <PillButton label="Request" tone="light" onPress={() => request.mutate()} />
+                        <PillButton
+                          label="Request"
+                          tone="light"
+                          onPress={() => request.mutate()}
+                          showFocusRing={tv}
+                          hasTVPreferredFocus={tv || undefined}
+                        />
                       ) : (
                         <PillButton
                           icon="play"
@@ -421,8 +688,25 @@ export function DetailsScreen({
                           tone="light"
                           onPress={() => play.mutate()}
                           disabled={iptvResolving || play.isPending}
+                          showFocusRing={tv}
+                          hasTVPreferredFocus={tv || undefined}
                         />
                       )}
+                      {listType && listTmdb ? (
+                        <PillButton
+                          label={
+                            toggleList.isPending
+                              ? "…"
+                              : onListQuery.data?.onList
+                                ? "✓ My List"
+                                : "+ My List"
+                          }
+                          tone="glass"
+                          onPress={() => toggleList.mutate()}
+                          disabled={toggleList.isPending}
+                          showFocusRing={tv}
+                        />
+                      ) : null}
                     </View>
                   </View>
                 </View>
@@ -441,7 +725,8 @@ export function DetailsScreen({
                       {media.metadata.tagline ? (
                         <Text style={styles.webTagline}>{media.metadata.tagline}</Text>
                       ) : null}
-                      {media.metadata.overview ? (
+                      {/* Movies put the synopsis on the episode-style row below (Netflix). */}
+                      {isTv && media.metadata.overview ? (
                         <Text style={styles.webOverview} numberOfLines={4}>
                           {media.metadata.overview}
                         </Text>
@@ -470,109 +755,38 @@ export function DetailsScreen({
                         ) : null}
                       </View>
                     </View>
-                    <View style={{ flex: 0.9, minWidth: 180, gap: 6 }}>
-                      {namesList(media.metadata.cast) ? (
-                        <Text style={styles.webFact}>
-                          <Text style={styles.webFactLabel}>Cast: </Text>
-                          {namesList(media.metadata.cast)}
-                        </Text>
-                      ) : null}
-                      {namesList(media.metadata.creators, 4) ? (
-                        <Text style={styles.webFact}>
-                          <Text style={styles.webFactLabel}>
-                            {isTv ? "Creators: " : "Director: "}
-                          </Text>
-                          {namesList(media.metadata.creators, 4)}
-                        </Text>
-                      ) : null}
-                      {namesList(media.metadata.writers, 3) ? (
-                        <Text style={styles.webFact}>
-                          <Text style={styles.webFactLabel}>Writers: </Text>
-                          {namesList(media.metadata.writers, 3)}
-                        </Text>
-                      ) : null}
-                      {media.metadata.genres?.length ? (
-                        <Text style={styles.webFact}>
-                          <Text style={styles.webFactLabel}>Genres: </Text>
-                          {media.metadata.genres.join(", ")}
-                        </Text>
-                      ) : null}
-                      {media.metadata.studios?.length ? (
-                        <Text style={styles.webFact}>
-                          <Text style={styles.webFactLabel}>Studios: </Text>
-                          {media.metadata.studios.join(", ")}
-                        </Text>
-                      ) : null}
-                      {media.metadata.keywords?.length ? (
-                        <Text style={styles.webFact}>
-                          <Text style={styles.webFactLabel}>
-                            {isTv ? "This show is: " : "This movie is: "}
-                          </Text>
-                          {media.metadata.keywords.slice(0, 6).join(", ")}
-                        </Text>
-                      ) : null}
-                    </View>
+                    <MediaFacts
+                      media={media}
+                      isTv={isTv}
+                      factStyle={styles.webFact}
+                      labelStyle={styles.webFactLabel}
+                      style={{ flex: 0.9, minWidth: 180, gap: 6 }}
+                    />
                   </View>
                   {episodesBlock}
-                  {media.metadata.cast?.length ? (
-                    <View style={styles.castSection}>
-                      <Text style={styles.webSection}>Cast & Crew</Text>
-                      <HScroll>
-                        {media.metadata.cast.map((person) => (
-                          <View
-                            key={`${person.tmdbId ?? person.name}-${person.role ?? ""}`}
-                            style={styles.castCard}
-                          >
-                            {person.profileUrl ? (
-                              <Artwork
-                                url={person.profileUrl}
-                                maxWidth={240}
-                                style={styles.castPhoto}
-                              />
-                            ) : (
-                              <View style={[styles.castPhoto, styles.castPhotoEmpty]}>
-                                <Text style={styles.castInitial}>
-                                  {(person.name.trim()[0] || "?").toUpperCase()}
-                                </Text>
-                              </View>
-                            )}
-                            <Text style={styles.castName} numberOfLines={2}>
-                              {person.name}
-                            </Text>
-                            {person.role ? (
-                              <Text style={styles.castRole} numberOfLines={2}>
-                                as {person.role}
-                              </Text>
-                            ) : null}
-                          </View>
-                        ))}
-                        {(media.metadata.creators ?? []).map((person) => (
-                          <View
-                            key={`crew-${person.tmdbId ?? person.name}-${person.role ?? ""}`}
-                            style={styles.castCard}
-                          >
-                            {person.profileUrl ? (
-                              <Artwork
-                                url={person.profileUrl}
-                                maxWidth={240}
-                                style={styles.castPhoto}
-                              />
-                            ) : (
-                              <View style={[styles.castPhoto, styles.castPhotoEmpty]}>
-                                <Text style={styles.castInitial}>
-                                  {(person.name.trim()[0] || "?").toUpperCase()}
-                                </Text>
-                              </View>
-                            )}
-                            <Text style={styles.castName} numberOfLines={2}>
-                              {person.name}
-                            </Text>
-                            <Text style={styles.castRole} numberOfLines={2}>
-                              {person.role || (isTv ? "Creator" : "Director")}
-                            </Text>
-                          </View>
-                        ))}
-                      </HScroll>
+                  <CastCrewCarousel
+                    cast={media.metadata.cast}
+                    creators={media.metadata.creators}
+                    isTv={isTv}
+                  />
+                  {(similarQuery.data?.items?.length ?? 0) > 0 ? (
+                    <View style={{ marginTop: 28, marginHorizontal: -28 }}>
+                      <MediaRail
+                        title="More Like This"
+                        items={similarQuery.data!.items}
+                        layout={layout}
+                        appearance="web"
+                        railIndex={0}
+                        onOpen={(item) => {
+                          close();
+                          openMedia(
+                            {
+                              navigate: (_: "Details", params) => nav.openDetails(params),
+                            },
+                            item,
+                          );
+                        }}
+                      />
                     </View>
                   ) : null}
                 </View>
@@ -588,13 +802,17 @@ export function DetailsScreen({
   }
 
   const back = (
-    <Button
-      label="Back"
-      variant="ghost"
-      showFocusRing={tv}
-      style={styles.backBtn}
+    <Pressable
+      accessibilityLabel="Back"
       onPress={() => nav.goBack?.()}
-    />
+      style={({ pressed, focused }) => [
+        styles.backBtn,
+        pressed && styles.backBtnPressed,
+        tv && focused ? styles.backBtnFocused : null,
+      ]}
+    >
+      <NfBackIcon size={28} color="#fff" />
+    </Pressable>
   );
 
   return (
@@ -620,11 +838,17 @@ export function DetailsScreen({
             </View>
             <Text style={styles.title}>{media.metadata.title}</Text>
             <Text style={styles.meta}>
-              {[media.metadata.year, formatRuntime(media.metadata.runtimeMinutes), media.identity.mediaType]
+              {[
+                media.metadata.year,
+                formatRuntime(media.metadata.runtimeMinutes),
+                media.identity.mediaType === "tv" || isTv ? "Series" : "Movie",
+              ]
                 .filter(Boolean)
                 .join("  ·  ")}
             </Text>
-            {media.metadata.overview ? <Text style={styles.overview}>{media.metadata.overview}</Text> : null}
+            {media.metadata.tagline ? (
+              <Text style={styles.tagline}>{media.metadata.tagline}</Text>
+            ) : null}
             {bufferStatus ? <Text style={styles.buffer}>{bufferStatus}</Text> : null}
             {ttl ? <Text style={styles.meta}>Cache {ttl}</Text> : null}
             {play.isError ? <Text style={styles.error}>{(play.error as Error).message}</Text> : null}
@@ -658,7 +882,23 @@ export function DetailsScreen({
                 />
               ) : null}
             </View>
+            {media.metadata.overview ? (
+              <Text style={styles.overview}>{media.metadata.overview}</Text>
+            ) : null}
+            <MediaFacts
+              media={media}
+              isTv={isTv}
+              factStyle={styles.fact}
+              labelStyle={styles.factLabel}
+              style={styles.facts}
+            />
             {episodesBlock}
+            <CastCrewCarousel
+              cast={media.metadata.cast}
+              creators={media.metadata.creators}
+              isTv={isTv}
+              titleStyle={styles.castSectionTitle}
+            />
           </>
         ) : null}
       </ScrollView>
@@ -688,16 +928,35 @@ const styles = StyleSheet.create({
   },
   backBtn: {
     alignSelf: "flex-start",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
     backgroundColor: "rgba(20,20,20,0.72)",
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  backBtnPressed: { opacity: 0.85 },
+  backBtnFocused: {
+    borderColor: colors.text,
+    backgroundColor: "rgba(40,40,40,0.9)",
   },
   backdrop: { height: 220, borderRadius: 8, opacity: 0.85, width: "100%" },
   title: { color: colors.text, fontSize: 28, fontWeight: "800" },
   meta: { color: colors.muted, marginTop: 8, fontSize: 15 },
+  tagline: {
+    color: colors.muted,
+    fontSize: 14,
+    fontStyle: "italic",
+    marginTop: 8,
+  },
   overview: { color: colors.text, marginTop: 14, fontSize: 15, lineHeight: 22 },
   buffer: { color: colors.text, marginTop: 12 },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 18 },
+  facts: { marginTop: 12, gap: 6 },
+  fact: { color: colors.text, fontSize: 13, lineHeight: 19 },
+  factLabel: { color: "#777" },
   error: { color: colors.danger, marginTop: 8 },
   seasons: { marginTop: 24 },
   seasonRow: { marginBottom: 12 },
@@ -708,6 +967,12 @@ const styles = StyleSheet.create({
   },
   episodePressed: { opacity: 0.85 },
   episodeTitle: { color: colors.text, fontSize: 15, fontWeight: "700" },
+  epTitleRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 12,
+  },
+  epRuntime: { color: "#a3a3a3", fontSize: 14, fontWeight: "500" },
   modalRoot: {
     flex: 1,
     backgroundColor: "transparent",
@@ -765,6 +1030,12 @@ const styles = StyleSheet.create({
   webSection: { color: "#fff", fontSize: 22, fontWeight: "700", marginBottom: 12 },
   webCloseText: { color: "#fff", fontSize: 22, lineHeight: 24 },
   castSection: { marginTop: 28 },
+  castSectionTitle: {
+    color: colors.text,
+    fontSize: 20,
+    fontWeight: "700",
+    marginBottom: 12,
+  },
   castCard: { width: 110, marginRight: 12 },
   castPhoto: {
     width: 110,
@@ -774,8 +1045,8 @@ const styles = StyleSheet.create({
   },
   castPhotoEmpty: { alignItems: "center", justifyContent: "center" },
   castInitial: { color: "#888", fontSize: 28, fontWeight: "700" },
-  castName: { color: "#fff", fontSize: 12, fontWeight: "600", marginTop: 8 },
-  castRole: { color: "#8c8c8c", fontSize: 11, marginTop: 2 },
+  castName: { color: colors.text, fontSize: 12, fontWeight: "600", marginTop: 8 },
+  castRole: { color: colors.muted, fontSize: 11, marginTop: 2 },
   seasonPill: {
     paddingHorizontal: 14,
     paddingVertical: 6,
@@ -783,8 +1054,17 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   seasonPillOn: { backgroundColor: "rgba(255,255,255,0.16)" },
+  seasonPillFocused: {
+    backgroundColor: "#fff",
+    transform: [{ scale: 1.05 }],
+  },
   seasonPillText: { color: "rgba(255,255,255,0.7)", fontSize: 15 },
   seasonPillTextOn: { color: "#fff", fontWeight: "700" },
+  seasonPillTextFocused: { color: "#000", fontWeight: "700" },
+  epStillFocused: {
+    borderWidth: 3,
+    borderColor: "#fff",
+  },
   epRow: {
     flexDirection: "row",
     gap: 14,

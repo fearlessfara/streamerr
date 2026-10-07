@@ -7,16 +7,19 @@ export type PlaybackKind = "hls" | "mpegts" | "progressive";
 export function classifyPlayback(source: PlaybackSource): PlaybackKind {
   const url = source.delivery.url;
   const mime = source.mimeType ?? "";
-  if (mime.includes("mp2t") || url.includes("/playback/dispatcharr/live/")) {
-    return "mpegts";
-  }
+  // HLS first — live remux lives under /playback/dispatcharr/live/.../hls/
   if (
     Boolean(source.hls) ||
-    source.playMethod === "Transcode" ||
     url.includes("m3u8") ||
     mime.includes("mpegurl")
   ) {
     return "hls";
+  }
+  if (
+    mime.includes("mp2t") ||
+    (url.includes("/playback/dispatcharr/live/") && !url.includes("/hls/"))
+  ) {
+    return "mpegts";
   }
   return "progressive";
 }
@@ -29,12 +32,42 @@ export function absoluteUrl(url: string, origin: string): string {
   }
 }
 
+/**
+ * Absolute playback URL with session in the query string for native players
+ * (AVPlayer / ExoPlayer) that cannot reliably send auth headers on HLS segments.
+ */
+export function playbackMediaUrl(
+  url: string,
+  origin: string,
+  sessionId?: string | null,
+): string {
+  const href = absoluteUrl(url, origin);
+  if (!sessionId) return href;
+  try {
+    const parsed = new URL(href);
+    if (!parsed.pathname.startsWith("/api/")) return href;
+    parsed.searchParams.set(SESSION_COOKIE, sessionId);
+    return parsed.href;
+  } catch {
+    return href;
+  }
+}
+
 export function sessionCookieHeader(sessionId: string | null | undefined): Record<string, string> {
   if (!sessionId) return {};
-  return {
-    Cookie: `${SESSION_COOKIE}=${sessionId}`,
+  const headers: Record<string, string> = {
+    // Fetch-safe on React Native (Cookie is a forbidden request header there).
     [SESSION_HEADER]: sessionId,
   };
+  // Browsers can send Cookie; RN silently drops it — keep for web/TV where it helps.
+  const product =
+    typeof navigator !== "undefined"
+      ? String((navigator as Navigator & { product?: string }).product ?? "")
+      : "";
+  if (product !== "ReactNative") {
+    headers.Cookie = `${SESSION_COOKIE}=${sessionId}`;
+  }
+  return headers;
 }
 
 export function isIptvProgressSource(

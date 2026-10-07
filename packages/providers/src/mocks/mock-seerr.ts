@@ -80,6 +80,11 @@ export class MockSeerrProvider implements DiscoveryProvider, RequestProvider {
     );
   }
 
+  async getSimilar(mediaType: "movie" | "tv", _tmdbId: number): Promise<Media[]> {
+    const pool = [requestableMovie, popularMovie, trendingTv].map(withAction);
+    return pool.filter((m) => m.identity.mediaType === mediaType).slice(0, 8);
+  }
+
   async getDetails(mediaType: "movie" | "tv", tmdbId: number): Promise<Media | null> {
     const all = [requestableMovie, popularMovie, trendingTv].map(withAction);
     const found = all.find(

@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { MediaIdentitySchema, SubtitleTrackSchema, toWebVtt } from "@streamerr/shared";
@@ -8,13 +8,18 @@ import type { AppContext } from "../context.js";
 import { requireAuth } from "../plugins/auth.js";
 import { IptvProgressStore } from "../services/iptv-progress.js";
 import { hlsDir, hlsPlaybackReady } from "../services/hls-paths.js";
+import { liveHlsReady } from "../services/live-hls.js";
 import {
   hlsAccelPath,
   mediaPlaneIsNginx,
   sendAccelRedirect,
   upstreamAccelPath,
 } from "../services/media-plane.js";
-import { rewriteHlsPlaylist } from "../services/jellyfin-hls-rewrite.js";
+import {
+  embedSessionInPlaylist,
+  requestPublicOrigin,
+  rewriteHlsPlaylist,
+} from "../services/jellyfin-hls-rewrite.js";
 
 export async function registerPlaybackRoutes(
   app: FastifyInstance,
@@ -32,6 +37,7 @@ export async function registerPlaybackRoutes(
         audioStreamIndex: z.number().int().optional(),
         /** Client-measured throughput cap (bits/s) from /api/playback/bandwidth-probe. */
         maxStreamingBitrate: z.number().int().positive().max(50_000_000).optional(),
+        deviceProfile: z.enum(["web", "ios", "android"]).optional(),
       })
       .parse(req.body);
 
@@ -39,6 +45,7 @@ export async function registerPlaybackRoutes(
       startPositionSeconds: body.startPositionSeconds,
       audioStreamIndex: body.audioStreamIndex,
       maxStreamingBitrate: body.maxStreamingBitrate,
+      deviceProfile: body.deviceProfile,
     });
     if (!result) {
       const err = new Error("No playable source") as Error & { statusCode: number };
@@ -115,8 +122,12 @@ export async function registerPlaybackRoutes(
     return { subtitles };
   });
 
+  /**
+   * Jellyfin progress — write-through via Streamerr SQLite, then async fan-out
+   * to Jellyfin Sessions/UserData. The player is never blocked on Jellyfin.
+   */
   app.post("/api/playback/progress", async (req) => {
-    const { userContext } = await requireAuth(req);
+    const { userContext, session } = await requireAuth(req);
     const body = z
       .object({
         itemId: z.string().min(1),
@@ -124,11 +135,44 @@ export async function registerPlaybackRoutes(
         isPaused: z.boolean().optional(),
         playSessionId: z.string().optional(),
         mediaSourceId: z.string().optional(),
+        playMethod: z.enum(["DirectPlay", "DirectStream", "Transcode"]).optional(),
         event: z.enum(["start", "progress", "stopped"]),
+        identity: MediaIdentitySchema.optional(),
+        durationSeconds: z.number().nonnegative().optional(),
+        title: z.string().optional(),
       })
       .parse(req.body);
 
-    await ctx.jellyfin.reportProgress(userContext, body);
+    const identity = {
+      mediaType: body.identity?.mediaType ?? ("other" as const),
+      tmdbId: body.identity?.tmdbId,
+      seasonNumber: body.identity?.seasonNumber,
+      episodeNumber: body.identity?.episodeNumber,
+      jellyfinItemId: body.identity?.jellyfinItemId ?? body.itemId,
+    };
+    const duration = body.durationSeconds;
+    const completed =
+      duration !== undefined &&
+      duration > 0 &&
+      body.positionSeconds / duration >= 0.9;
+
+    iptvProgress.upsert(session.jellyfinUserId, {
+      identity,
+      provider: "jellyfin",
+      positionSeconds: body.positionSeconds,
+      durationSeconds: duration,
+      title: body.title,
+      completed,
+      preserveHigherPosition: body.event === "start" || body.positionSeconds < 5,
+    });
+
+    // Fan-out: best-effort, never await — Jellyfin latency/500s must not stall Play.
+    void Promise.resolve()
+      .then(() => ctx.jellyfin.reportProgress(userContext, body))
+      .catch((err) => {
+        req.log.debug({ err }, "jellyfin progress fan-out failed");
+      });
+
     return { ok: true };
   });
 
@@ -153,6 +197,7 @@ export async function registerPlaybackRoutes(
 
     iptvProgress.upsert(session.jellyfinUserId, {
       identity: body.identity,
+      provider: "dispatcharr",
       positionSeconds: body.positionSeconds,
       durationSeconds: duration,
       title: body.title,
@@ -197,9 +242,8 @@ export async function registerPlaybackRoutes(
     });
 
     // HLS master playlist stays in the API (rewrite segment URLs); media bytes go via nginx.
-    const looksLikePlaylist =
-      query.playMethod === "Transcode" ||
-      (query.transcodingPath?.includes(".m3u8") ?? false);
+    // Progressive Transcode (stream.mp4 / http) is NOT a playlist — only .m3u8 is.
+    const looksLikePlaylist = query.transcodingPath?.includes(".m3u8") ?? false;
 
     if (nginxPlane && !looksLikePlaylist) {
       return sendAccelRedirect(reply, upstreamAccelPath("jellyfin", target.url.toString()), {
@@ -225,12 +269,15 @@ export async function registerPlaybackRoutes(
     const isPlaylist =
       ct.includes("mpegurl") ||
       ct.includes("m3u8") ||
-      (query.transcodingPath?.includes(".m3u8") ?? false) ||
-      query.playMethod === "Transcode";
+      (query.transcodingPath?.includes(".m3u8") ?? false);
 
     if (isPlaylist) {
       const text = await upstream.text();
-      const rewritten = rewriteHlsPlaylist(text, query);
+      const rewritten = rewriteHlsPlaylist(text, {
+        ...query,
+        sessionId: req.session?.id,
+        publicOrigin: requestPublicOrigin(req),
+      });
       reply.header("Content-Type", "application/vnd.apple.mpegurl");
       reply.header("Cache-Control", "no-cache");
       return reply.send(rewritten);
@@ -264,6 +311,7 @@ export async function registerPlaybackRoutes(
    * node media plane: stream files from disk.
    */
   const sendCacheHls = async (
+    req: { session?: { id: string } },
     reply: FastifyReply,
     id: string,
     relative: string,
@@ -288,6 +336,15 @@ export async function registerPlaybackRoutes(
       return reply.status(404).send({ error: "Segment not found" });
     }
 
+    // Playlists must embed session on every segment URI — AVPlayer drops headers.
+    if (clean.endsWith(".m3u8")) {
+      const raw = readFileSync(filePath, "utf8");
+      const body = req.session?.id ? embedSessionInPlaylist(raw, req.session.id) : raw;
+      reply.header("Content-Type", contentTypeForHls(clean));
+      reply.header("Cache-Control", "no-cache");
+      return reply.send(body);
+    }
+
     if (nginxPlane) {
       return sendAccelRedirect(reply, hlsAccelPath(id, clean), {
         contentType: contentTypeForHls(clean),
@@ -297,14 +354,14 @@ export async function registerPlaybackRoutes(
     const st = statSync(filePath);
     reply.header("Content-Type", contentTypeForHls(clean));
     reply.header("Content-Length", String(st.size));
-    reply.header("Cache-Control", clean.endsWith(".m3u8") ? "no-cache" : "private, max-age=3600");
+    reply.header("Cache-Control", "private, max-age=3600");
     return reply.send(createReadStream(filePath));
   };
 
   app.get("/api/playback/cache/:id/hls/index.m3u8", async (req, reply) => {
     await requireAuth(req);
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    return sendCacheHls(reply, id, "index.m3u8");
+    return sendCacheHls(req, reply, id, "index.m3u8");
   });
 
   app.get("/api/playback/cache/:id/hls/:segment", async (req, reply) => {
@@ -315,7 +372,7 @@ export async function registerPlaybackRoutes(
         segment: z.string().min(1).regex(/^[\w.-]+$/),
       })
       .parse(req.params);
-    return sendCacheHls(reply, params.id, params.segment);
+    return sendCacheHls(req, reply, params.id, params.segment);
   });
 
   /** Legacy cache URL → HLS playlist (bookmarks / old clients). */
@@ -377,21 +434,73 @@ export async function registerPlaybackRoutes(
         cleanup();
         return reply.send(Buffer.from(await upstream.arrayBuffer()));
       }
-      lease.signal.addEventListener(
-        "abort",
-        () => {
-          try {
-            void upstream.body?.cancel();
-          } catch {
-            /* ignore */
-          }
-        },
-        { once: true },
-      );
+      // Do not cancel() the body on lease abort — once reply.send() pipes it the
+      // stream is locked and cancel() crashes the process (ERR_INVALID_STATE).
+      // Aborting lease.signal cancels the upstream fetch instead.
       return reply.send(upstream.body);
     } catch (err) {
       throw err;
     }
+  });
+
+  /**
+   * Live HLS remux (MPEG-TS → sliding window) for AVPlayer / iOS.
+   * Session is started by POST /api/live/play/:uuid with { hls: true }.
+   */
+  app.get("/api/playback/dispatcharr/live/:uuid/hls/index.m3u8", async (req, reply) => {
+    await requireAuth(req);
+    const { uuid } = z.object({ uuid: z.string().uuid() }).parse(req.params);
+
+    if (ctx.useMocks || !(ctx.dispatcharr instanceof DispatcharrProvider)) {
+      return reply.status(404).send({ error: "Live HLS requires Dispatcharr" });
+    }
+
+    const provider = ctx.dispatcharr;
+    try {
+      await ctx.liveHls.ensureReady(uuid, (opts) => provider.openLiveStream(opts));
+    } catch (err) {
+      const e = err as Error & { statusCode?: number };
+      return reply.status(e.statusCode ?? 502).send({ error: e.message });
+    }
+
+    const filePath = ctx.liveHls.filePath(uuid, "index.m3u8");
+    if (!filePath || !existsSync(filePath) || !liveHlsReady(ctx.config.STREAMERR_DATA_DIR, uuid)) {
+      return reply.status(404).send({ error: "Live HLS not ready" });
+    }
+
+    ctx.liveHls.touch(uuid);
+    const raw = readFileSync(filePath, "utf8");
+    const sessionId = req.session?.id;
+    // Keep segments relative to the playlist URL (already absolute via playbackMediaUrl).
+    // Absolute rewrites + Host mismatches have caused AVPlayer "resource unavailable".
+    const body = sessionId ? embedSessionInPlaylist(raw, sessionId) : raw;
+
+    reply.header("Content-Type", "application/vnd.apple.mpegurl");
+    reply.header("Cache-Control", "no-cache");
+    reply.header("Access-Control-Allow-Origin", "*");
+    return reply.send(body);
+  });
+
+  app.get("/api/playback/dispatcharr/live/:uuid/hls/:segment", async (req, reply) => {
+    await requireAuth(req);
+    const params = z
+      .object({
+        uuid: z.string().uuid(),
+        segment: z.string().min(1).regex(/^[\w.-]+$/),
+      })
+      .parse(req.params);
+
+    ctx.liveHls.touch(params.uuid);
+    const filePath = ctx.liveHls.filePath(params.uuid, params.segment);
+    if (!filePath || !existsSync(filePath)) {
+      return reply.status(404).send({ error: "Segment not found" });
+    }
+
+    const st = statSync(filePath);
+    reply.header("Content-Type", contentTypeForHls(params.segment));
+    reply.header("Content-Length", String(st.size));
+    reply.header("Cache-Control", "no-store");
+    return reply.send(createReadStream(filePath));
   });
 
   /**
@@ -561,7 +670,11 @@ export async function registerPlaybackRoutes(
     const ct = upstream.headers.get("content-type") ?? "";
     if (ct.includes("mpegurl") || path.includes(".m3u8")) {
       const text = await upstream.text();
-      const rewritten = rewriteHlsPlaylist(text, { path });
+      const rewritten = rewriteHlsPlaylist(text, {
+        path,
+        sessionId: req.session?.id,
+        publicOrigin: requestPublicOrigin(req),
+      });
       reply.header("Content-Type", "application/vnd.apple.mpegurl");
       reply.header("Cache-Control", "no-cache");
       return reply.send(rewritten);

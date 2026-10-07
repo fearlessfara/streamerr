@@ -15,9 +15,11 @@ import { SessionService } from "./services/session.js";
 import { PlaybackResolver } from "./services/playback-resolver.js";
 import { AcquisitionManager } from "./services/acquisition-manager.js";
 import { LiveFavouritesStore } from "./services/live-favourites.js";
+import { MyListStore } from "./services/my-list.js";
 import { CacheManager } from "./services/cache-manager.js";
 import { IptvConnectionManager } from "./services/iptv-connection-manager.js";
 import { IptvProgressStore } from "./services/iptv-progress.js";
+import { LiveHlsManager } from "./services/live-hls.js";
 import { startVodCatalogSync } from "./services/vod-catalog-sync.js";
 
 export interface AppContext {
@@ -33,9 +35,11 @@ export interface AppContext {
   playbackResolver: PlaybackResolver;
   acquisitions: AcquisitionManager;
   liveFavourites: LiveFavouritesStore;
+  myList: MyListStore;
   cacheManager: CacheManager;
   iptvConnections: IptvConnectionManager;
   iptvProgress: IptvProgressStore;
+  liveHls: LiveHlsManager;
   /** Last authenticated Jellyfin user context used for background library scans. */
   lastLibraryUserContext?: import("@streamerr/providers").UserContext;
   useMocks: boolean;
@@ -106,6 +110,7 @@ export function createAppContext(config: AppConfig): AppContext {
 
   const providers: MediaProvider[] = [jellyfin, seerr, dispatcharr, bazarr];
   const liveFavourites = new LiveFavouritesStore(db);
+  const myList = new MyListStore(db);
   const cacheManager = new CacheManager(db, {
     maxBytes: config.STREAMERR_CACHE_MAX_BYTES,
     ttlMs: config.STREAMERR_CACHE_TTL_MS,
@@ -114,6 +119,8 @@ export function createAppContext(config: AppConfig): AppContext {
     dataDir: config.STREAMERR_DATA_DIR,
   });
   const iptvConnections = new IptvConnectionManager(config.STREAMERR_IPTV_MAX_CONNECTIONS);
+  const liveHls = new LiveHlsManager(config.STREAMERR_DATA_DIR, iptvConnections);
+  liveHls.start();
   const acquisitions = new AcquisitionManager(
     config.STREAMERR_DATA_DIR,
     dispatcharr,
@@ -148,9 +155,11 @@ export function createAppContext(config: AppConfig): AppContext {
     playbackResolver,
     acquisitions,
     liveFavourites,
+    myList,
     cacheManager,
     iptvConnections,
     iptvProgress,
+    liveHls,
     useMocks,
   };
 

@@ -11,7 +11,6 @@ export function useScreenNav(): ScreenNav {
     openDetails: (params) => navigation.navigate("Details", params),
     openPlayer: (params) => navigation.navigate("Player", params),
     goBack: () => navigation.goBack(),
-    openServer: (opts) => navigation.navigate("Server", opts),
     resetToLogin: () => navigation.reset({ index: 0, routes: [{ name: "Login" }] }),
     resetToMain: () => navigation.reset({ index: 0, routes: [{ name: "Home" }] }),
   };

@@ -1,15 +1,34 @@
 import { useEffect, useRef, useState } from "react";
-import { Platform, Pressable, StyleSheet, Text, View, type ViewStyle } from "react-native";
+import {
+  Animated,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type ViewStyle,
+} from "react-native";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Media } from "@streamerr/shared";
-import { actionLabel, canPlayMedia, cardBadge, formatRuntime } from "@streamerr/client";
+import {
+  actionLabel,
+  canPlayMedia,
+  cardBadge,
+  formatRuntime,
+  myListHas,
+  toggleMyList,
+} from "@streamerr/client";
 import { Artwork } from "./Artwork.js";
 import { isTvFocused } from "./focus.js";
 import { ChevronDownIcon, DownloadIcon, PlayIcon } from "./icons.js";
 import type { NativeLayout } from "./layout.js";
 import { colors } from "./theme.js";
+import { textShadowStyle } from "./webStyle.js";
 
 /** Grow the hover popover past the resting poster (mostly downward). */
 const GROW_Y = 1.14;
+/** Netflix TV focus enlarge. */
+const FOCUS_SCALE = 1.12;
 /** Netflix-ish expand / collapse timing. */
 const HOVER_OPEN_MS = 420;
 const HOVER_CLOSE_MS = 320;
@@ -75,8 +94,14 @@ export type PosterCardProps = {
   /** Show D-pad / keyboard focus ring (TV + RN-web 10-foot). */
   showFocusRing?: boolean;
   borderRadius?: number;
-  /** `hover` hides the caption and reveals a Netflix-style panel. */
-  variant?: "caption" | "hover";
+  /**
+   * `hover` — browser popover panel.
+   * `focus` — Google TV / 10-foot scale + ring (Netflix TV).
+   * `caption` — mobile title under the poster.
+   */
+  variant?: "caption" | "hover" | "focus";
+  /** 1–10 rank badge for Top 10 rails. */
+  rank?: number;
 };
 
 export function PosterCard({
@@ -91,6 +116,7 @@ export function PosterCard({
   showFocusRing = false,
   borderRadius = 6,
   variant = "caption",
+  rank,
 }: PosterCardProps) {
   const backdrop = media.metadata.backdropUrl;
   const poster = media.metadata.posterUrl;
@@ -102,13 +128,15 @@ export function PosterCard({
   const badge = cardBadge(media);
   const progress = watchProgress(media);
   const hover = variant === "hover";
+  const focusStage = variant === "focus";
   const w = layout.cardWidth;
   const h = layout.posterH;
   const ph = Math.round(h * GROW_Y);
   const maxSide = Math.max(0, layout.cardGap - 2);
   const pw = Math.min(Math.round(w * 1.1), w + maxSide * 2);
   const restScale = Math.round((w / pw) * 1000) / 1000;
-  const radius = hover ? 8 : borderRadius;
+  const radius = hover || focusStage ? 8 : borderRadius;
+  const focusScale = useRef(new Animated.Value(1)).current;
   const meta = [
     media.identity.mediaType === "tv" ? "Series" : media.identity.mediaType === "movie" ? "Movie" : null,
     media.metadata.year ? String(media.metadata.year) : null,
@@ -117,6 +145,26 @@ export function PosterCard({
     .filter(Boolean)
     .join("  ·  ");
   const genres = (media.metadata.genres ?? []).slice(0, 3).join("  ·  ");
+  const listType: "movie" | "tv" | null =
+    media.identity.mediaType === "movie"
+      ? "movie"
+      : media.identity.mediaType === "tv" || media.identity.mediaType === "episode"
+        ? "tv"
+        : null;
+  const listTmdb = media.identity.tmdbId;
+  const qc = useQueryClient();
+  const onListQuery = useQuery({
+    queryKey: ["mylist", "has", listType, listTmdb],
+    queryFn: () => myListHas(listType!, listTmdb!),
+    enabled: Boolean(hover && listType && listTmdb),
+  });
+  const toggleList = useMutation({
+    mutationFn: () => toggleMyList(listType!, listTmdb!),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["mylist"] });
+      void qc.invalidateQueries({ queryKey: ["home"] });
+    },
+  });
   // Controlled by rail when `expanded` is passed; otherwise local hover.
   const open = expanded ?? localHover;
   // `lifted` keeps the enlarged layout mounted through the close animation.
@@ -215,6 +263,75 @@ export function PosterCard({
     );
   }
 
+  useEffect(() => {
+    if (!focusStage) return;
+    Animated.spring(focusScale, {
+      toValue: focused ? FOCUS_SCALE : 1,
+      friction: 7,
+      tension: 120,
+      useNativeDriver: true,
+    }).start();
+  }, [focused, focusStage, focusScale]);
+
+  if (focusStage) {
+    return (
+      <View
+        style={{
+          width: w,
+          height: h,
+          marginRight: layout.cardGap,
+          zIndex: focused ? 20 : 0,
+          alignItems: "center",
+          justifyContent: "center",
+          overflow: "visible",
+        }}
+      >
+        <Animated.View
+          style={{
+            width: w,
+            height: h,
+            transform: [{ scale: focusScale }],
+            zIndex: focused ? 20 : 0,
+          }}
+        >
+          <Pressable
+            onPress={onPress}
+            hasTVPreferredFocus={hasTVPreferredFocus}
+            onFocus={() => {
+              setFocused(true);
+              onFocusCard?.();
+            }}
+            onBlur={() => setFocused(false)}
+            style={{
+              width: w,
+              height: h,
+              borderRadius: radius,
+              backgroundColor: colors.bg2,
+              overflow: "hidden",
+            }}
+          >
+            {(state) => {
+              const on = focused || isTvFocused(state);
+              return (
+                <>
+                  {renderArt(w, h, true)}
+                  {on ? (
+                    <View style={[styles.focusRing, { width: w, height: h, borderRadius: radius }]} />
+                  ) : null}
+                </>
+              );
+            }}
+          </Pressable>
+        </Animated.View>
+        {focused ? (
+          <Text style={[styles.focusTitle, { width: w, top: h + 8 }]} numberOfLines={1}>
+            {media.metadata.title}
+          </Text>
+        ) : null}
+      </View>
+    );
+  }
+
   if (hover) {
     // Keep horizontal grow inside the gap so the enlarged card does not cover
     // neighbors — otherwise you can never hand off hover to the next title.
@@ -233,8 +350,14 @@ export function PosterCard({
           marginRight: layout.cardGap,
           position: "relative",
           zIndex: hot ? 30 : 0,
+          marginLeft: rank != null ? 18 : 0,
         }}
       >
+        {rank != null ? (
+          <View style={styles.rankBadge} pointerEvents="none">
+            <Text style={styles.rankText}>{rank}</Text>
+          </View>
+        ) : null}
         <View
           {...({
             dataSet: { sePop: hot ? (popped ? "1" : "0") : "idle" },
@@ -316,6 +439,15 @@ export function PosterCard({
                   >
                     <PlayIcon color="#000" size={16} />
                   </Pressable>
+                  {listType && listTmdb ? (
+                    <Pressable
+                      onPress={() => toggleList.mutate()}
+                      style={styles.infoCircle}
+                      accessibilityLabel={onListQuery.data?.onList ? "Remove from My List" : "Add to My List"}
+                    >
+                      <Text style={styles.listMark}>{onListQuery.data?.onList ? "✓" : "+"}</Text>
+                    </Pressable>
+                  ) : null}
                   <View style={{ flex: 1 }} />
                   <Pressable onPress={onPress} style={styles.infoCircle} accessibilityLabel="More info">
                     <ChevronDownIcon color="#fff" size={14} />
@@ -414,6 +546,14 @@ const styles = StyleSheet.create({
     borderColor: colors.text,
     pointerEvents: "none",
   },
+  focusTitle: {
+    position: "absolute",
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "700",
+    textAlign: "center",
+    ...textShadowStyle(0, 1, 6, "rgba(0,0,0,0.85)"),
+  },
   placeholderText: {
     color: colors.text,
     textAlign: "center",
@@ -480,6 +620,22 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.7)",
     alignItems: "center",
     justifyContent: "center",
+  },
+  listMark: { color: "#fff", fontSize: 18, fontWeight: "700", lineHeight: 20 },
+  rankBadge: {
+    position: "absolute",
+    left: -4,
+    bottom: 4,
+    zIndex: 2,
+    minWidth: 36,
+    paddingHorizontal: 4,
+  },
+  rankText: {
+    color: "#fff",
+    fontSize: 48,
+    fontWeight: "900",
+    lineHeight: 48,
+    ...textShadowStyle(0, 2, 8, "rgba(0,0,0,0.9)"),
   },
   panelTitle: { color: "#fff", fontSize: 14, fontWeight: "700" },
   panelMeta: { color: "#fff", fontSize: 12, fontWeight: "600", marginTop: 6 },

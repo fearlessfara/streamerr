@@ -53,7 +53,7 @@ export function ServerScreen() {
 const styles = StyleSheet.create({
   page: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: "#000",
     padding: 64,
     justifyContent: "center",
     maxWidth: 720,

@@ -159,6 +159,34 @@ export class SeerrProvider implements DiscoveryProvider, RequestProvider {
     }
   }
 
+  async getSimilar(
+    mediaType: "movie" | "tv",
+    tmdbId: number,
+    opts?: { page?: number },
+  ): Promise<Media[]> {
+    const page = opts?.page ?? 1;
+    const base = mediaType === "movie" ? "movie" : "tv";
+    const id = encodeURIComponent(String(tmdbId));
+    // Prefer similar; fall back to recommendations (Jellyseerr/Overseerr both expose these).
+    for (const kind of ["similar", "recommendations"] as const) {
+      try {
+        const { data } = await this.http().request(
+          "GET",
+          `/api/v1/${base}/${id}/${kind}`,
+          {
+            query: { page },
+            schema: SeerrResultsPageSchema,
+          },
+        );
+        const items = this.mapResults(data.results ?? []);
+        if (items.length > 0) return items;
+      } catch {
+        // try next kind
+      }
+    }
+    return [];
+  }
+
   /**
    * Full TMDb episode guide from Seerr. This is the series page spine:
    * an episode can be missing from Jellyfin and still be listed, then

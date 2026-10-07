@@ -6,7 +6,7 @@ import { me } from "@streamerr/client";
 import { StatusBar } from "expo-status-bar";
 import type { Nav, RootStackParamList } from "./src/nav";
 import { attachClient, loadServerUrl } from "./src/session";
-import { colors } from "./src/theme";
+import { webBg } from "@streamerr/native-ui";
 import { BootSkeleton } from "./src/components/Skeleton";
 import { ServerScreen } from "./src/screens/ServerScreen";
 import { LoginScreen } from "./src/screens/LoginScreen";
@@ -82,7 +82,7 @@ export function App() {
           screenOptions={{
             headerShown: false,
             animation: "fade",
-            contentStyle: { backgroundColor: colors.bg },
+            contentStyle: { backgroundColor: webBg },
           }}
         >
           <Stack.Screen name="Boot" component={BootScreen} />
@@ -95,7 +95,15 @@ export function App() {
           <Stack.Screen name="Live" component={Live} />
           <Stack.Screen name="Downloads" component={Downloads} />
           <Stack.Screen name="Requests" component={Requests} />
-          <Stack.Screen name="Details" component={Details} />
+          <Stack.Screen
+            name="Details"
+            component={Details}
+            options={{
+              presentation: "transparentModal",
+              animation: "fade",
+              contentStyle: { backgroundColor: "transparent" },
+            }}
+          />
           <Stack.Screen name="Player" component={PlayerScreen} />
         </Stack.Navigator>
       </NavigationContainer>

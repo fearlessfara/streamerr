@@ -3,26 +3,22 @@ import {
   attachClient as attach,
   clearSession as clear,
   loadServerUrl as load,
-  normalizeServerUrl,
-  probeServer,
-  saveServerUrl as save,
   SERVER_URL_KEY,
 } from "@streamerr/native-ui";
-import { apiBaseUrl, isCurrentSpaOrigin, isSpaDevPort, webStorage } from "./storage";
+import { apiBaseUrl, isSpaDevPort, webStorage } from "./storage";
 
-export { SERVER_URL_KEY, SESSION_KEY, probeServer } from "@streamerr/native-ui";
+export { SERVER_URL_KEY, SESSION_KEY } from "@streamerr/native-ui";
 
 /**
  * Resolve the Streamerr API origin for this browser session.
- * Never treat the Expo/Metro SPA origin as the API (that returns HTML for /api/*).
+ *
+ * Web always uses the host serving this SPA (same-origin / Metro `/api` proxy).
+ * There is no “change server” — that is a mobile/TV concern.
  */
 export async function loadServerUrl(): Promise<string | null> {
+  // Drop any legacy saved API URL from when web had a server picker.
   const stored = await load(webStorage);
-  if (stored && !isCurrentSpaOrigin(stored)) {
-    return stored;
-  }
-  if (stored && isCurrentSpaOrigin(stored)) {
-    // Stale “server” saving of the web app URL — drop it.
+  if (stored) {
     await webStorage.removeItem(SERVER_URL_KEY);
   }
 
@@ -34,19 +30,10 @@ export async function loadServerUrl(): Promise<string | null> {
   const auto = apiBaseUrl();
   if (auto) return auto;
   if (typeof window !== "undefined") {
-    return window.location.origin;
+    // Production: web is served from the Streamerr API host.
+    return "";
   }
   return null;
-}
-
-export async function saveServerUrl(url: string): Promise<string> {
-  const normalized = normalizeServerUrl(url);
-  if (isCurrentSpaOrigin(normalized)) {
-    throw new Error(
-      "That’s the web app, not the Streamerr API. Use the API port (e.g. http://192.168.1.10:8787).",
-    );
-  }
-  return save(webStorage, normalized);
 }
 
 export async function clearSession(): Promise<void> {
@@ -58,7 +45,7 @@ export function attachClient(baseUrl: string): StreamerrClient {
   return attach(webStorage, baseUrl);
 }
 
-/** Dev convenience: auto-attach when no server saved. */
+/** Attach the same-origin (or env) API client. */
 export async function ensureClient(): Promise<string | null> {
   const url = await loadServerUrl();
   // `""` is a valid same-origin / proxied base — still attach.

@@ -953,11 +953,13 @@ export class DispatcharrProvider implements VodProvider, LiveTvProvider, Acquisi
     pageSize?: number;
     favouritesOnly?: boolean;
     favouriteUuids?: string[];
+    sort?: "number" | "name" | "name_desc";
   }): Promise<{ items: LiveChannel[]; total: number }> {
     const page = Math.max(1, opts?.page ?? 1);
     const pageSize = Math.min(100, Math.max(1, opts?.pageSize ?? 50));
     const search = opts?.search?.trim();
     const favouriteSet = new Set(opts?.favouriteUuids ?? []);
+    const sort = opts?.sort ?? "number";
 
     // Upstream group filters are unreliable — cache + filter locally for small catalogues.
     const all = await this.loadAllChannels();
@@ -976,6 +978,12 @@ export class DispatcharrProvider implements VodProvider, LiveTvProvider, Acquisi
           (c.tvgId?.toLowerCase().includes(q) ?? false),
       );
     }
+
+    filtered = [...filtered].sort((a, b) => {
+      if (sort === "name") return a.name.localeCompare(b.name);
+      if (sort === "name_desc") return b.name.localeCompare(a.name);
+      return (a.number ?? 1e9) - (b.number ?? 1e9) || a.name.localeCompare(b.name);
+    });
 
     const total = filtered.length;
     const start = (page - 1) * pageSize;

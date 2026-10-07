@@ -25,3 +25,11 @@ export async function clearSession(): Promise<void> {
 export function attachClient(baseUrl: string): StreamerrClient {
   return attach(AsyncStorage, baseUrl);
 }
+
+/** Re-attach after Metro reload / cold start so login sessions are stored. */
+export async function ensureClient(): Promise<string | null> {
+  const url = await loadServerUrl();
+  if (!url) return null;
+  attachClient(url);
+  return url;
+}

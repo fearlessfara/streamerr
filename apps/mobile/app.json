@@ -13,8 +13,10 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSAppTransportSecurity": {
-          "NSAllowsLocalNetworking": true
+          "NSAllowsLocalNetworking": true,
+          "NSAllowsArbitraryLoads": true
         },
+        "NSLocalNetworkUsageDescription": "Streamerr needs local network access to reach your Streamerr API and Jellyfin on your LAN.",
         "UIRequiresFullScreen": false
       }
     },
@@ -39,7 +41,8 @@
             "usesCleartextTraffic": true
           },
           "ios": {
-            "deploymentTarget": "16.4"
+            "deploymentTarget": "16.4",
+            "enableSceneSupport": true
           }
         }
       ]

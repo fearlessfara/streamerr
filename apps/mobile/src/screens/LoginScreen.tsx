@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { KeyboardAvoidingView } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LoginScreen as SharedLogin, loginKeyboardBehavior } from "@streamerr/native-ui";
+import { ensureClient } from "../session";
 import { useScreenNav } from "../useScreenNav";
 
 export function LoginScreen() {
@@ -12,6 +13,7 @@ export function LoginScreen() {
       nav={nav}
       storage={AsyncStorage}
       deviceName="Streamerr Mobile"
+      ensureApi={ensureClient}
       paddingTop={insets.top + 32}
       paddingBottom={insets.bottom + 24}
       wrapper={(children) => (

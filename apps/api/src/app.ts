@@ -21,6 +21,7 @@ import { registerRequestRoutes } from "./routes/request.js";
 import { registerAcquisitionRoutes } from "./routes/acquisition.js";
 import { registerLiveRoutes } from "./routes/live.js";
 import { registerLibraryRoutes } from "./routes/library.js";
+import { registerMyListRoutes } from "./routes/mylist.js";
 
 function corsOrigins(publicUrl: string): true | string[] {
   try {
@@ -82,6 +83,7 @@ export async function buildApp(ctx: AppContext) {
   await registerAcquisitionRoutes(app, ctx);
   await registerLibraryRoutes(app, ctx);
   await registerLiveRoutes(app, ctx);
+  await registerMyListRoutes(app, ctx);
   await registerPlaybackRoutes(app, ctx);
   await registerImageRoutes(app, ctx);
 

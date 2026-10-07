@@ -10,22 +10,26 @@ export function SearchScreen({ username }: { username: string }) {
   return (
     <Chrome username={username}>
       <SharedSearch
-        layout={{ ...layout, gridColumns: 5 }}
+        layout={layout}
         nav={nav}
         focusMode="tv"
+        appearance="web"
         searchInput={({ value, onChangeText }) => (
           <TvTextInput
             style={{
-              backgroundColor: "#2f2f2f",
+              backgroundColor: "rgba(255,255,255,0.08)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.35)",
               color: "#fff",
-              fontSize: 16,
-              padding: 12,
+              fontSize: 18,
+              paddingHorizontal: 16,
+              paddingVertical: 12,
               borderRadius: 4,
-              marginBottom: 16,
+              marginBottom: 20,
             }}
             value={value}
             onChangeText={onChangeText}
-            placeholder="Find movies and TV…"
+            placeholder="Titles, people, genres"
             placeholderTextColor="#b3b3b3"
             autoCapitalize="none"
             autoCorrect={false}

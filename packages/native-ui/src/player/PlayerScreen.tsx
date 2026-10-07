@@ -9,6 +9,7 @@ import {
 import {
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -17,21 +18,24 @@ import {
 } from "react-native";
 import type { KeyValueStorage } from "@streamerr/client";
 import {
-  absoluteUrl,
   getClient,
   isIptvProgressSource,
   listPlaybackSubtitles,
   loadSubtitlePref,
+  playbackMediaUrl,
   playLiveChannel,
   reportIptvProgress,
   reportProgress,
+  resolvePlaybackForPlay,
   resolveSubtitleIndex,
   saveSubtitleOff,
   saveSubtitleTrack,
   seekCapForSource,
+  seriesEpisodes,
+  SESSION_HEADER,
   textSubtitles,
 } from "@streamerr/client";
-import type { MediaIdentity, PlaybackSource, SubtitleTrack } from "@streamerr/shared";
+import type { EpisodeListItem, MediaIdentity, PlaybackSource, SubtitleTrack } from "@streamerr/shared";
 import { colors } from "../theme.js";
 import type { LiveChannelRef } from "../screens/types.js";
 import type { VideoSurfaceProps, VideoTransport } from "./VideoSurfaceProps.js";
@@ -79,6 +83,10 @@ export type PlayerScreenProps = {
   userAgent?: string;
   /** Disable live channel zap (e.g. iOS). */
   liveZapEnabled?: boolean;
+  /** Fired as playback advances — used to persist reload resume offsets. */
+  onPositionSeconds?: (seconds: number) => void;
+  /** Safe-area padding so chrome clears notch / home indicator (mobile landscape). */
+  chromeInsets?: { top?: number; bottom?: number; left?: number; right?: number };
 };
 
 function formatTime(seconds: number): string {
@@ -94,10 +102,12 @@ function IconButton({
   onPress,
   label,
   children,
+  large,
 }: {
   onPress: () => void;
   label: string;
   children: ReactNode;
+  large?: boolean;
 }) {
   return (
     <Pressable
@@ -105,9 +115,9 @@ function IconButton({
         e?.stopPropagation?.();
         onPress();
       }}
-      style={styles.iconBtn}
+      style={[styles.iconBtn, large && styles.iconBtnLarge]}
       accessibilityLabel={label}
-      hitSlop={8}
+      hitSlop={10}
     >
       {children}
     </Pressable>
@@ -122,7 +132,13 @@ export function PlayerScreen({
   onReplaceParams,
   userAgent = "Streamerr/1.0",
   liveZapEnabled = true,
+  onPositionSeconds,
+  chromeInsets,
 }: PlayerScreenProps) {
+  const insetTop = chromeInsets?.top ?? 0;
+  const insetBottom = chromeInsets?.bottom ?? 0;
+  const insetLeft = chromeInsets?.left ?? 0;
+  const insetRight = chromeInsets?.right ?? 0;
   const [source, setSource] = useState<PlaybackSource>(params.source);
   const [paused, setPaused] = useState(false);
   const [controls, setControls] = useState(true);
@@ -131,26 +147,49 @@ export function PlayerScreen({
   const [error, setError] = useState<string | null>(null);
   const [subIndex, setSubIndex] = useState<number | null>(null);
   const [subtitleTracks, setSubtitleTracks] = useState<SubtitleTrack[]>(source.subtitles ?? []);
-  const [menu, setMenu] = useState<"none" | "subs" | "speed">("none");
+  const [menu, setMenu] = useState<"none" | "subs" | "speed" | "episodes">("none");
+  const [episodeItems, setEpisodeItems] = useState<EpisodeListItem[]>([]);
+  const [episodeSeasons, setEpisodeSeasons] = useState<number[]>([]);
+  const [episodeSeason, setEpisodeSeason] = useState<number | null>(null);
+  const [episodeBusy, setEpisodeBusy] = useState(false);
   const [muted, setMuted] = useState(false);
   const [rate, setRate] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
   const [headers, setHeaders] = useState<Record<string, string> | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  /** Hover preview time (seconds) over the scrub bar — web pointer only. */
+  const [scrubHover, setScrubHover] = useState<number | null>(null);
+  const [barHovered, setBarHovered] = useState(false);
   const seekFn = useRef<((seconds: number) => void) | null>(null);
   const transportRef = useRef<VideoTransport | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const progressStarted = useRef(false);
+  /** Ignore spurious native onEnd before real playback (common on iOS HLS load failures). */
+  const playbackEverProgressed = useRef(false);
+  const mediaLoaded = useRef(false);
+  const resumeApplied = useRef(false);
   const positionRef = useRef(0);
+  const pausedRef = useRef(false);
   const seekCapRef = useRef(Infinity);
   const barWidthRef = useRef(0);
+  const barElRef = useRef<View>(null);
+  const knownDurationRef = useRef(0);
   const client = getClient();
   const isLive = Boolean(params.live);
   const identity = params.identity;
+  const seriesTmdbId =
+    identity?.mediaType === "episode" || identity?.mediaType === "tv"
+      ? identity.tmdbId
+      : undefined;
+  const isEpisodePlayback = identity?.mediaType === "episode" && seriesTmdbId != null;
 
   const reveal = useCallback((keep = false) => {
     setControls(true);
     if (hideTimer.current) clearTimeout(hideTimer.current);
-    if (!keep) hideTimer.current = setTimeout(() => setControls(false), HIDE_MS);
+    // Keep chrome up until media actually moves — otherwise failed loads look like a black screen.
+    if (!keep && playbackEverProgressed.current) {
+      hideTimer.current = setTimeout(() => setControls(false), HIDE_MS);
+    }
   }, []);
 
   const togglePause = useCallback(() => {
@@ -178,10 +217,12 @@ export function PlayerScreen({
   const seekToRatio = useCallback(
     (ratio: number) => {
       if (isLive) return;
+      const dur = knownDurationRef.current;
+      if (!(dur > 0) || !Number.isFinite(dur)) return;
       const cap = seekCapRef.current;
-      const dur = cap === Infinity ? 0 : cap;
-      if (dur <= 0) return;
-      const next = Math.max(0, Math.min(dur, ratio * dur));
+      const max = Number.isFinite(cap) ? Math.min(cap, dur) : dur;
+      if (!(max > 0)) return;
+      const next = Math.max(0, Math.min(max, ratio * max));
       seekFn.current?.(next);
       positionRef.current = next;
       setPosition(next);
@@ -217,7 +258,34 @@ export function PlayerScreen({
     setSource(params.source);
     setSubtitleTracks(params.source.subtitles ?? []);
     progressStarted.current = false;
+    playbackEverProgressed.current = false;
+    mediaLoaded.current = false;
+    resumeApplied.current = false;
+    setError(null);
   }, [params.source]);
+
+  const applyResumeSeek = useCallback(
+    (dur: number) => {
+      if (resumeApplied.current || isLive) return;
+      const start = source.startPositionSeconds ?? 0;
+      if (!(start > 30) || !(dur > 0) || !Number.isFinite(dur)) return;
+      // Never seek to/past EOF — that fires onEnd before any progress on iOS HLS.
+      if (start >= dur - 15) {
+        resumeApplied.current = true;
+        return;
+      }
+      const capped = Math.min(start, Math.max(0, dur - 15));
+      if (!(capped > 30)) {
+        resumeApplied.current = true;
+        return;
+      }
+      resumeApplied.current = true;
+      seekFn.current?.(capped);
+      positionRef.current = capped;
+      setPosition(capped);
+    },
+    [isLive, source.startPositionSeconds],
+  );
 
   useEffect(() => {
     void loadSubtitlePref(storage).then((pref) => {
@@ -240,32 +308,67 @@ export function PlayerScreen({
 
   useEffect(() => {
     let cancelled = false;
-    void client.sessionHeaders().then((next) => {
-      if (cancelled) return;
-      setHeaders({ ...next, "User-Agent": userAgent });
-    });
+    void client
+      .sessionHeaders()
+      .then((next) => {
+        if (cancelled) return;
+        const sid = next[SESSION_HEADER] ?? null;
+        setSessionId(sid);
+        setHeaders({ ...next, "User-Agent": userAgent });
+        // Web often relies on the session cookie (credentials: include) without an
+        // in-memory id. Native needs the header/query session for MPEG-TS / HLS.
+        if (!sid && typeof document === "undefined") {
+          setError("Not signed in — session missing for playback");
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setHeaders({ "User-Agent": userAgent });
+        setError((err as Error).message || "Failed to load playback session");
+      });
     return () => {
       cancelled = true;
     };
   }, [client, userAgent]);
 
   const origin = client.baseUrl || "http://localhost";
-  const uri = absoluteUrl(source.delivery.url, origin);
-  const knownDuration = duration > 0 ? duration : source.durationSeconds ?? 0;
+  const uri = playbackMediaUrl(source.delivery.url, origin, sessionId);
+  // Prefer a finite player-reported duration; fall back to catalogue metadata.
+  // MSE/HLS sometimes reports Infinity — that must not wipe the scrubber.
+  const knownDuration = (() => {
+    const fromPlayer = Number.isFinite(duration) && duration > 0 ? duration : 0;
+    const fromSource =
+      source.durationSeconds != null &&
+      Number.isFinite(source.durationSeconds) &&
+      source.durationSeconds > 0
+        ? source.durationSeconds
+        : 0;
+    return fromPlayer > 0 ? fromPlayer : fromSource;
+  })();
   const seekCap = seekCapForSource(source, knownDuration);
   positionRef.current = position;
+  pausedRef.current = paused;
   seekCapRef.current = seekCap;
+  knownDurationRef.current = knownDuration;
 
   const report = useCallback(
     (event: "start" | "progress" | "stopped", seconds: number, pausedNow?: boolean) => {
-      if (source.itemId) {
+      onPositionSeconds?.(seconds);
+      // Jellyfin Sessions/Playing* only applies to Jellyfin streams. Cache/IPTV
+      // must use iptv-progress — calling Sessions with a stale/foreign itemId
+      // 500s every 5s and floods the API log.
+      if (source.provider === "jellyfin" && source.itemId) {
         void reportProgress({
           itemId: source.itemId,
           positionSeconds: seconds,
           event,
           playSessionId: source.playSessionId,
           mediaSourceId: source.mediaSourceId,
+          playMethod: source.playMethod,
           isPaused: pausedNow,
+          identity,
+          durationSeconds: knownDuration > 0 ? knownDuration : undefined,
+          title: params.title,
         });
       } else if (isIptvProgressSource(source.provider, isLive, identity) && identity) {
         void reportIptvProgress({
@@ -277,9 +380,10 @@ export function PlayerScreen({
         });
       }
     },
-    [identity, isLive, knownDuration, params.title, source],
+    [identity, isLive, knownDuration, onPositionSeconds, params.title, source],
   );
 
+  // Netflix-style: persist position ~every 5s from live refs (not a stale closure).
   useEffect(() => {
     if (!progressStarted.current) {
       progressStarted.current = true;
@@ -290,17 +394,20 @@ export function PlayerScreen({
           : 0,
       );
     }
-    const id = setInterval(() => report("progress", position, paused), 10_000);
+    const id = setInterval(() => {
+      report("progress", positionRef.current, pausedRef.current);
+    }, 5_000);
     return () => {
       clearInterval(id);
-      report("stopped", position, true);
+      report("stopped", positionRef.current, true);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source.itemId, source.playSessionId, identity?.tmdbId]);
 
   // Netflix-style keyboard: Space play/pause; ←/→ skip 10s; hold arrow to keep seeking.
+  // RN has a `window` global but no DOM addEventListener — web only.
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (Platform.OS !== "web" || typeof window?.addEventListener !== "function") return;
 
     let holdKey: "ArrowLeft" | "ArrowRight" | null = null;
     let holdDelay: ReturnType<typeof setTimeout> | null = null;
@@ -423,7 +530,7 @@ export function PlayerScreen({
     const idx = list.findIndex((c) => c.uuid === params.channelUuid);
     const next = list[(idx + dir + list.length) % list.length];
     if (!next) return;
-    const data = await playLiveChannel(next.uuid);
+    const data = await playLiveChannel(next.uuid, { hls: Platform.OS === "ios" });
     onReplaceParams({
       source: data.source,
       title: data.title ?? next.name,
@@ -433,21 +540,172 @@ export function PlayerScreen({
     });
   };
 
+  const loadEpisodes = useCallback(async () => {
+    if (!seriesTmdbId) return;
+    try {
+      const data = await seriesEpisodes(seriesTmdbId);
+      setEpisodeItems(data.items);
+      setEpisodeSeasons(data.seasons);
+      const curSeason = identity?.seasonNumber ?? data.seasons[0] ?? null;
+      setEpisodeSeason(curSeason);
+    } catch {
+      setEpisodeItems([]);
+      setEpisodeSeasons([]);
+    }
+  }, [seriesTmdbId, identity?.seasonNumber]);
+
+  const playEpisodeItem = useCallback(
+    async (ep: EpisodeListItem) => {
+      if (episodeBusy) return;
+      setEpisodeBusy(true);
+      setError(null);
+      try {
+        const nextSource = await resolvePlaybackForPlay(ep.identity, {
+          meta: { runtimeMinutes: ep.runtimeMinutes },
+        });
+        setMenu("none");
+        onReplaceParams({
+          source: nextSource,
+          title: ep.title,
+          identity: ep.identity,
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not play episode");
+      } finally {
+        setEpisodeBusy(false);
+      }
+    },
+    [episodeBusy, onReplaceParams],
+  );
+
+  const playNextEpisode = useCallback(async () => {
+    if (!isEpisodePlayback || !seriesTmdbId || episodeBusy) return;
+    reveal(true);
+    setEpisodeBusy(true);
+    setError(null);
+    try {
+      let items = episodeItems;
+      if (!items.length) {
+        const data = await seriesEpisodes(seriesTmdbId);
+        items = data.items;
+        setEpisodeItems(items);
+        setEpisodeSeasons(data.seasons);
+      }
+      const s = identity?.seasonNumber;
+      const e = identity?.episodeNumber;
+      if (s == null || e == null) return;
+      const idx = items.findIndex((ep) => ep.seasonNumber === s && ep.episodeNumber === e);
+      const next =
+        (idx >= 0 ? items[idx + 1] : null) ??
+        items.find((ep) => ep.seasonNumber === s && ep.episodeNumber === e + 1) ??
+        items.find((ep) => ep.seasonNumber === s + 1 && ep.episodeNumber === 1);
+      if (!next) {
+        setError("No next episode");
+        setEpisodeBusy(false);
+        return;
+      }
+      // playEpisodeItem owns busy flag from here.
+      setEpisodeBusy(false);
+      await playEpisodeItem(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not play next episode");
+      setEpisodeBusy(false);
+    }
+  }, [
+    episodeBusy,
+    episodeItems,
+    identity?.episodeNumber,
+    identity?.seasonNumber,
+    isEpisodePlayback,
+    playEpisodeItem,
+    reveal,
+    seriesTmdbId,
+  ]);
+
+  const openEpisodesMenu = useCallback(() => {
+    if (!isEpisodePlayback) return;
+    setMenu((m) => (m === "episodes" ? "none" : "episodes"));
+    reveal(true);
+    void loadEpisodes();
+  }, [isEpisodePlayback, loadEpisodes, reveal]);
+
   const onBarLayout = (e: LayoutChangeEvent) => {
     barWidthRef.current = e.nativeEvent.layout.width;
   };
 
+  const barDomRect = useCallback((): DOMRect | null => {
+    const node = barElRef.current as unknown as HTMLElement | null;
+    if (!node || typeof node.getBoundingClientRect !== "function") return null;
+    return node.getBoundingClientRect();
+  }, []);
+
+  const ratioFromClientX = useCallback(
+    (clientX: number) => {
+      const rect = barDomRect();
+      const width = rect && rect.width > 0 ? rect.width : barWidthRef.current;
+      if (!(width > 0)) return null;
+      if (rect) barWidthRef.current = rect.width;
+      const left = rect?.left ?? 0;
+      return Math.min(1, Math.max(0, (clientX - left) / width));
+    },
+    [barDomRect],
+  );
+
   const onBarPress = (e: GestureResponderEvent) => {
+    e?.stopPropagation?.();
+    if (Platform.OS === "web") {
+      const ne = e.nativeEvent as GestureResponderEvent["nativeEvent"] & {
+        clientX?: number;
+        pageX?: number;
+      };
+      const clientX = typeof ne.clientX === "number" ? ne.clientX : ne.pageX;
+      if (typeof clientX === "number") {
+        const ratio = ratioFromClientX(clientX);
+        if (ratio != null) {
+          seekToRatio(ratio);
+          return;
+        }
+      }
+    }
     const w = barWidthRef.current;
     if (w <= 0) return;
-    const x = e.nativeEvent.locationX;
-    seekToRatio(Math.min(1, Math.max(0, x / w)));
+    seekToRatio(Math.min(1, Math.max(0, e.nativeEvent.locationX / w)));
   };
+
+  const setHoverFromRatio = useCallback((ratio: number) => {
+    const dur = knownDurationRef.current;
+    if (!(dur > 0) || !Number.isFinite(dur)) {
+      setScrubHover(null);
+      return;
+    }
+    setScrubHover(Math.min(1, Math.max(0, ratio)) * dur);
+  }, []);
+
+  const clearScrubHover = useCallback(() => {
+    setScrubHover(null);
+    setBarHovered(false);
+  }, []);
+
+  /** Web mouse handlers — RN-web forwards these on Pressable. */
+  const webBarHoverProps =
+    Platform.OS === "web"
+      ? ({
+          onMouseMove: (e: { clientX: number }) => {
+            const ratio = ratioFromClientX(e.clientX);
+            if (ratio == null) return;
+            setBarHovered(true);
+            setHoverFromRatio(ratio);
+          },
+          onMouseLeave: clearScrubHover,
+        } as Record<string, unknown>)
+      : {};
 
   const progressRatio =
     !isLive && knownDuration > 0 ? Math.min(1, Math.max(0, position / knownDuration)) : 0;
   const remainingLabel =
     isLive ? "LIVE" : knownDuration > 0 ? formatTime(Math.max(0, knownDuration - position)) : formatTime(position);
+  const scrubTipRatio =
+    scrubHover !== null && knownDuration > 0 ? Math.min(1, Math.max(0, scrubHover / knownDuration)) : null;
 
   return (
     <Pressable
@@ -463,7 +721,7 @@ export function PlayerScreen({
         else reveal();
       }}
     >
-      {headers ? (
+      {headers && (Platform.OS === "web" || sessionId || !source.hls) ? (
         <VideoSurface
           source={source}
           uri={uri}
@@ -474,18 +732,50 @@ export function PlayerScreen({
           subtitleIndex={subIndex}
           subtitleTracks={subtitleTracks}
           onProgress={({ currentTime, duration: d }) => {
+            if (currentTime > 0.25 && !playbackEverProgressed.current) {
+              playbackEverProgressed.current = true;
+              reveal();
+            }
             setPosition(currentTime);
-            if (d && d > 0) setDuration(d);
-          }}
-          onLoad={({ duration: d }) => {
-            setDuration(d > 0 ? d : knownDuration);
-            const start = source.startPositionSeconds ?? 0;
-            if (start > 30 && !isLive) {
-              seekFn.current?.(start);
-              setPosition(start);
+            onPositionSeconds?.(currentTime);
+            if (typeof d === "number" && Number.isFinite(d) && d > 0) {
+              setDuration(d);
+              applyResumeSeek(d);
             }
           }}
-          onEnd={onClose}
+          onLoad={({ duration: d }) => {
+            mediaLoaded.current = true;
+            const dur =
+              typeof d === "number" && Number.isFinite(d) && d > 0
+                ? d
+                : knownDuration > 0
+                  ? knownDuration
+                  : 0;
+            if (dur > 0) setDuration(dur);
+            // Only resume once we know duration — seeking with dur=0 EOF-kills iOS HLS.
+            applyResumeSeek(dur);
+          }}
+          onEnd={() => {
+            // Spurious onEnd before load/progress (bad seek, auth fail treated as EOF).
+            if (!playbackEverProgressed.current && !isLive) {
+              setError((prev) => {
+                if (prev) return prev;
+                const host = (() => {
+                  try {
+                    return new URL(uri).host;
+                  } catch {
+                    return "?";
+                  }
+                })();
+                if (!mediaLoaded.current) {
+                  return `Stream failed to load from ${host}. Is the API URL reachable from this phone?`;
+                }
+                return `Playback stopped before it started (${host}). Try Play again from the beginning.`;
+              });
+              return;
+            }
+            onClose();
+          }}
           onError={setError}
           onSeekRequest={(seek) => {
             seekFn.current = seek;
@@ -498,13 +788,43 @@ export function PlayerScreen({
         />
       ) : null}
 
-      {controls ? (
+      {!headers ? (
+        <View style={styles.loadingBox} pointerEvents="none">
+          <Text style={styles.loadingText}>Loading stream…</Text>
+        </View>
+      ) : null}
+
+      {/* Persistent back — Netflix keeps this reachable while chrome auto-hides. */}
+      <View
+        style={[
+          styles.alwaysBack,
+          { paddingTop: 8 + insetTop, paddingLeft: 8 + insetLeft },
+        ]}
+        pointerEvents="box-none"
+      >
+        <IconButton onPress={onClose} label="Back" large>
+          <NfBackIcon size={32} />
+        </IconButton>
+      </View>
+
+      {controls && !error ? (
         <View style={styles.chrome} pointerEvents="box-none">
-          {/* Top: back (left) + report flag (right) */}
-          <View style={styles.top} pointerEvents="box-none">
-            <IconButton onPress={onClose} label="Back">
-              <NfBackIcon size={28} />
-            </IconButton>
+          <View style={styles.topGradient} pointerEvents="none" />
+          <View style={styles.bottomGradient} pointerEvents="none" />
+
+          <View
+            style={[
+              styles.top,
+              {
+                paddingTop: 8 + insetTop,
+                paddingRight: 16 + insetRight,
+                paddingLeft: 56 + insetLeft,
+              },
+            ]}
+          >
+            <Text style={styles.topTitle} numberOfLines={1}>
+              {params.title ?? ""}
+            </Text>
             <View style={styles.topRight}>
               {isLive ? (
                 <View style={styles.liveBadge}>
@@ -512,31 +832,74 @@ export function PlayerScreen({
                 </View>
               ) : null}
               <IconButton onPress={() => reveal(true)} label="Report a problem">
-                <NfFlagIcon size={26} />
+                <NfFlagIcon size={24} />
               </IconButton>
             </View>
           </View>
 
-          {/* Bottom: progress + control row */}
-          <View style={styles.bottom} pointerEvents="box-none">
+          <View style={styles.centerPlay} pointerEvents="box-none">
+            <IconButton onPress={togglePause} label={paused ? "Play" : "Pause"} large>
+              <View style={styles.centerPlayHit}>
+                {paused ? <NfPlayIcon size={40} /> : <NfPauseIcon size={40} />}
+              </View>
+            </IconButton>
+          </View>
+
+          <Pressable
+            style={[
+              styles.bottom,
+              {
+                paddingBottom: 16 + insetBottom,
+                paddingLeft: 20 + insetLeft,
+                paddingRight: 20 + insetRight,
+              },
+            ]}
+            onPress={(e) => e?.stopPropagation?.()}
+          >
             {!isLive ? (
               <View style={styles.progressRow}>
-                <Pressable
+                <View
+                  ref={barElRef}
                   style={styles.barHit}
                   onLayout={onBarLayout}
-                  onPress={onBarPress}
-                  accessibilityLabel="Seek"
+                  {...webBarHoverProps}
                 >
-                  <View style={styles.barTrack}>
-                    <View style={[styles.barFill, { width: `${progressRatio * 100}%` }]} />
+                  {scrubTipRatio !== null && scrubHover !== null ? (
                     <View
                       style={[
-                        styles.scrubber,
-                        { left: `${progressRatio * 100}%` },
+                        styles.scrubTip,
+                        { left: `${scrubTipRatio * 100}%` },
+                        Platform.OS === "web"
+                          ? ({ transform: "translate(-50%, calc(-100% - 6px))" } as object)
+                          : null,
                       ]}
-                    />
-                  </View>
-                </Pressable>
+                    >
+                      <Text style={styles.scrubTipText}>{formatTime(scrubHover)}</Text>
+                    </View>
+                  ) : null}
+                  <Pressable
+                    style={styles.barPress}
+                    onPress={onBarPress}
+                    accessibilityLabel="Seek"
+                  >
+                    <View style={[styles.barTrack, barHovered && styles.barTrackHot]}>
+                      <View
+                        style={[
+                          styles.barFill,
+                          barHovered && styles.barFillHot,
+                          { width: `${progressRatio * 100}%` },
+                        ]}
+                      />
+                      <View
+                        style={[
+                          styles.scrubber,
+                          barHovered && styles.scrubberHot,
+                          { left: `${progressRatio * 100}%` },
+                        ]}
+                      />
+                    </View>
+                  </Pressable>
+                </View>
                 <Text style={styles.time}>{remainingLabel}</Text>
               </View>
             ) : null}
@@ -544,15 +907,15 @@ export function PlayerScreen({
             <View style={styles.row}>
               <View style={styles.leftActions}>
                 <IconButton onPress={togglePause} label={paused ? "Play" : "Pause"}>
-                  {paused ? <NfPlayIcon size={28} /> : <NfPauseIcon size={28} />}
+                  {paused ? <NfPlayIcon size={30} /> : <NfPauseIcon size={30} />}
                 </IconButton>
                 {!isLive ? (
                   <>
                     <IconButton onPress={() => skipBy(-SKIP_S)} label="Back 10 seconds">
-                      <NfRewind10Icon size={30} />
+                      <NfRewind10Icon size={34} />
                     </IconButton>
                     <IconButton onPress={() => skipBy(SKIP_S)} label="Forward 10 seconds">
-                      <NfForward10Icon size={30} />
+                      <NfForward10Icon size={34} />
                     </IconButton>
                   </>
                 ) : null}
@@ -571,18 +934,17 @@ export function PlayerScreen({
                 ) : null}
               </View>
 
-              <Text style={styles.centerTitle} numberOfLines={1}>
-                {params.title ?? "Playing"}
-              </Text>
-
               <View style={styles.rightActions}>
-                {!isLive ? (
-                  <IconButton onPress={() => reveal()} label="Next episode">
+                {isEpisodePlayback ? (
+                  <IconButton
+                    onPress={() => void playNextEpisode()}
+                    label={episodeBusy ? "Loading next episode" : "Next episode"}
+                  >
                     <NfNextEpisodeIcon size={28} />
                   </IconButton>
                 ) : null}
-                {!isLive ? (
-                  <IconButton onPress={() => reveal()} label="Episodes">
+                {isEpisodePlayback ? (
+                  <IconButton onPress={openEpisodesMenu} label="Episodes">
                     <NfEpisodesIcon size={28} />
                   </IconButton>
                 ) : null}
@@ -598,12 +960,14 @@ export function PlayerScreen({
                 >
                   <NfSpeedIcon size={28} />
                 </IconButton>
-                <IconButton
-                  onPress={() => void toggleFullscreen()}
-                  label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
-                >
-                  <NfFullscreenIcon size={26} exit={fullscreen} />
-                </IconButton>
+                {Platform.OS === "web" ? (
+                  <IconButton
+                    onPress={() => void toggleFullscreen()}
+                    label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  >
+                    <NfFullscreenIcon size={26} exit={fullscreen} />
+                  </IconButton>
+                ) : null}
               </View>
             </View>
 
@@ -648,14 +1012,67 @@ export function PlayerScreen({
                 ))}
               </View>
             ) : null}
-          </View>
+
+            {menu === "episodes" ? (
+              <View style={[styles.menu, styles.episodesMenu]}>
+                <Text style={styles.menuHeading}>Episodes</Text>
+                {episodeSeasons.length > 1 ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.seasonRow}>
+                    {episodeSeasons.map((s) => (
+                      <Pressable
+                        key={s}
+                        onPress={() => setEpisodeSeason(s)}
+                        style={[styles.seasonPill, episodeSeason === s && styles.seasonPillActive]}
+                      >
+                        <Text
+                          style={[
+                            styles.seasonPillText,
+                            episodeSeason === s && styles.seasonPillTextActive,
+                          ]}
+                        >
+                          Season {s}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                ) : null}
+                <ScrollView style={styles.episodeList} showsVerticalScrollIndicator={false}>
+                  {episodeItems
+                    .filter((ep) => episodeSeason == null || ep.seasonNumber === episodeSeason)
+                    .map((ep) => {
+                      const current =
+                        ep.seasonNumber === identity?.seasonNumber &&
+                        ep.episodeNumber === identity?.episodeNumber;
+                      return (
+                        <Pressable
+                          key={`${ep.seasonNumber}-${ep.episodeNumber}`}
+                          disabled={episodeBusy}
+                          onPress={() => void playEpisodeItem(ep)}
+                          style={styles.episodeRow}
+                        >
+                          <Text
+                            style={[styles.menuItem, current && styles.menuItemActive]}
+                            numberOfLines={1}
+                          >
+                            {ep.episodeNumber}. {ep.title}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  {!episodeItems.length ? (
+                    <Text style={styles.menuItem}>Loading episodes…</Text>
+                  ) : null}
+                </ScrollView>
+              </View>
+            ) : null}
+          </Pressable>
         </View>
       ) : null}
 
       {error ? (
         <View style={styles.errorBox}>
           <Text style={styles.errorText}>{error}</Text>
-          <Pressable onPress={onClose}>
+          <Pressable onPress={onClose} style={styles.errorCloseBtn}>
             <Text style={styles.errorClose}>Close</Text>
           </Pressable>
         </View>
@@ -671,23 +1088,71 @@ const styles = StyleSheet.create({
   chrome: {
     ...StyleSheet.absoluteFill,
     justifyContent: "space-between",
+    pointerEvents: "box-none",
+    zIndex: 5,
+  },
+  topGradient: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 120,
+    backgroundColor: "rgba(0,0,0,0.55)",
+  },
+  bottomGradient: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 160,
+    backgroundColor: "rgba(0,0,0,0.65)",
+  },
+  alwaysBack: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    zIndex: 8,
+  },
+  centerPlay: {
+    ...StyleSheet.absoluteFill,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 6,
+  },
+  centerPlayHit: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.55)",
+    backgroundColor: "rgba(0,0,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingLeft: 3,
   },
   top: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 20,
     paddingTop: 18,
-    paddingBottom: 40,
-    // Soft fade like Netflix top gradient
-    backgroundColor: "transparent",
+    paddingBottom: 24,
+    gap: 16,
+    pointerEvents: "box-none",
+    zIndex: 2,
   },
-  topRight: { flexDirection: "row", alignItems: "center", gap: 12 },
+  topTitle: {
+    flex: 1,
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "600",
+    letterSpacing: 0.2,
+  },
+  topRight: { flexDirection: "row", alignItems: "center", gap: 8 },
   liveBadge: {
     backgroundColor: colors.accent,
     paddingHorizontal: 8,
     paddingVertical: 3,
-    borderRadius: 3,
+    borderRadius: 2,
   },
   liveBadgeText: {
     color: "#fff",
@@ -696,55 +1161,97 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   bottom: {
-    paddingHorizontal: 20,
-    paddingBottom: 18,
-    paddingTop: 28,
-    backgroundColor: "transparent",
+    paddingTop: 12,
+    pointerEvents: "box-none",
+    zIndex: 2,
   },
   progressRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
-    marginBottom: 14,
+    gap: 14,
+    marginBottom: 18,
+    overflow: "visible",
   },
   barHit: {
     flex: 1,
-    height: 20,
+    height: 32,
+    justifyContent: "center",
+    position: "relative",
+    overflow: "visible",
+    ...(Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null),
+  },
+  barPress: {
+    ...StyleSheet.absoluteFill,
     justifyContent: "center",
   },
   barTrack: {
     height: 3,
-    backgroundColor: "rgba(255,255,255,0.35)",
+    backgroundColor: "rgba(255,255,255,0.3)",
     borderRadius: 2,
     position: "relative",
     overflow: "visible",
+  },
+  barTrackHot: {
+    height: 5,
   },
   barFill: {
     height: 3,
     backgroundColor: NETFLIX_RED,
     borderRadius: 2,
+    pointerEvents: "none",
+  },
+  barFillHot: {
+    height: 5,
   },
   scrubber: {
     position: "absolute",
-    top: -5,
-    marginLeft: -6.5,
-    width: 13,
-    height: 13,
-    borderRadius: 7,
+    top: "50%",
+    marginTop: -6,
+    marginLeft: -6,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
     backgroundColor: NETFLIX_RED,
+    pointerEvents: "none",
+  },
+  scrubberHot: {
+    width: 16,
+    height: 16,
+    marginTop: -8,
+    marginLeft: -8,
+    borderRadius: 8,
+  },
+  scrubTip: {
+    position: "absolute",
+    top: 0,
+    backgroundColor: "rgba(0,0,0,0.85)",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 3,
+    zIndex: 4,
+    minWidth: 52,
+    alignItems: "center",
+    pointerEvents: "none",
+  },
+  scrubTipText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
   },
   time: {
     color: "#fff",
     fontSize: 14,
     fontWeight: "500",
-    minWidth: 48,
+    minWidth: 52,
     textAlign: "right",
     fontVariant: ["tabular-nums"],
   },
   row: {
     flexDirection: "row",
     alignItems: "center",
-    minHeight: 40,
+    justifyContent: "space-between",
+    minHeight: 48,
   },
   leftActions: {
     flexDirection: "row",
@@ -757,21 +1264,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 18,
     flexShrink: 0,
-  },
-  centerTitle: {
-    color: "#fff",
-    fontSize: 15,
-    fontWeight: "500",
-    flex: 1,
-    textAlign: "center",
-    paddingHorizontal: 16,
+    marginLeft: "auto",
   },
   iconBtn: {
-    padding: 4,
+    padding: 6,
     alignItems: "center",
     justifyContent: "center",
-    minWidth: 36,
-    minHeight: 36,
+    minWidth: 40,
+    minHeight: 40,
+  },
+  iconBtnLarge: {
+    minWidth: 48,
+    minHeight: 48,
+    padding: 8,
   },
   chLabel: { color: "#fff", fontWeight: "700", fontSize: 13 },
   menu: {
@@ -794,14 +1299,41 @@ const styles = StyleSheet.create({
   },
   menuItem: { color: "#fff", fontSize: 15, paddingVertical: 6 },
   menuItemActive: { color: NETFLIX_RED, fontWeight: "700" },
+  episodesMenu: { minWidth: 280, maxWidth: 360, maxHeight: 280 },
+  seasonRow: { marginBottom: 8, maxHeight: 36 },
+  seasonPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    marginRight: 8,
+  },
+  seasonPillActive: { backgroundColor: "#fff" },
+  seasonPillText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  seasonPillTextActive: { color: "#000" },
+  episodeList: { maxHeight: 180 },
+  episodeRow: { paddingVertical: 2 },
+  loadingBox: {
+    ...StyleSheet.absoluteFill,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  loadingText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   errorBox: {
     ...StyleSheet.absoluteFill,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(0,0,0,0.8)",
-    gap: 16,
+    backgroundColor: "rgba(0,0,0,0.82)",
+    gap: 20,
     padding: 24,
+    zIndex: 20,
   },
-  errorText: { color: colors.danger, fontSize: 16, textAlign: "center" },
+  errorText: { color: colors.danger, fontSize: 16, textAlign: "center", maxWidth: 420 },
+  errorCloseBtn: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 4,
+    backgroundColor: "rgba(255,255,255,0.15)",
+  },
   errorClose: { color: "#fff", fontWeight: "700", fontSize: 15 },
 });

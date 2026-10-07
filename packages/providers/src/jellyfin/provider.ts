@@ -334,10 +334,13 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
       audioStreamIndex?: number;
       /** Client-measured cap (bits/s); combined with a server probe of the Jellyfin hop. */
       maxStreamingBitrate?: number;
+      deviceProfile?: "web" | "ios" | "android";
     },
   ): Promise<PlaybackSource | null> {
     const itemId = identity.jellyfinItemId;
     if (!itemId) return null;
+    const deviceProfile = opts?.deviceProfile ?? "web";
+    const native = deviceProfile === "ios" || deviceProfile === "android";
 
     const item = await this.getByJellyfinItemId(userContext, itemId);
     const jellyfinAvail = item?.availability.find((a) => a.provider === "jellyfin");
@@ -368,7 +371,9 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
         query: { userId: userContext.jellyfinUserId },
         body: {
           UserId: userContext.jellyfinUserId,
-          DeviceProfile: browserDeviceProfile(maxStreamingBitrate),
+          DeviceProfile: native
+            ? nativeDeviceProfile(deviceProfile, maxStreamingBitrate)
+            : browserDeviceProfile(maxStreamingBitrate),
           EnableDirectPlay: true,
           EnableDirectStream: true,
           EnableTranscoding: true,
@@ -385,7 +390,9 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
     if (!source) return null;
 
     const playSessionId = data.PlaySessionId;
-    let playMethod = resolvePlayMethodForBrowser(source);
+    let playMethod = native
+      ? resolvePlayMethodForNative(source)
+      : resolvePlayMethodForBrowser(source);
     const requestedAudio = opts?.audioStreamIndex;
     const defaultAudio = source.DefaultAudioStreamIndex ?? undefined;
     // DirectPlay streams the full file; browsers pick their own default audio and
@@ -396,12 +403,16 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
       playMethod === "DirectPlay" &&
       (defaultAudio == null || requestedAudio !== defaultAudio)
     ) {
-      const hlsAvailable =
-        source.TranscodingSubProtocol === "hls" ||
-        Boolean(source.TranscodingUrl?.includes(".m3u8"));
-      if (hlsAvailable) playMethod = "Transcode";
-      else if (source.SupportsDirectStream || source.SupportsTranscoding) {
+      if (native && source.SupportsDirectStream) {
         playMethod = "DirectStream";
+      } else {
+        const hlsAvailable =
+          source.TranscodingSubProtocol === "hls" ||
+          Boolean(source.TranscodingUrl?.includes(".m3u8"));
+        if (!native && hlsAvailable) playMethod = "Transcode";
+        else if (source.SupportsDirectStream || source.SupportsTranscoding) {
+          playMethod = source.SupportsDirectStream ? "DirectStream" : "Transcode";
+        }
       }
     }
     const isHls =
@@ -418,7 +429,7 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
     if (audioIndex != null) {
       params.set("audioStreamIndex", String(audioIndex));
     }
-    if (source.TranscodingUrl && isHls) {
+    if (source.TranscodingUrl && playMethod === "Transcode") {
       const relative = normalizeJellyfinRelativePath(source.TranscodingUrl, this.baseUrl);
       // Strip any StartTimeTicks Jellyfin echoed — full VOD playlist + client seek only.
       if (relative) {
@@ -427,6 +438,11 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
           u.searchParams.delete("StartTimeTicks");
           if (audioIndex != null) {
             u.searchParams.set("AudioStreamIndex", String(audioIndex));
+          }
+          // Native progressive Transcode must not burn default ASS — we sideload text.
+          if (native && !isHls) {
+            u.searchParams.delete("SubtitleStreamIndex");
+            u.searchParams.delete("SubtitleMethod");
           }
           params.set("transcodingPath", `${u.pathname}${u.search}`);
         } catch {
@@ -469,9 +485,11 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
       hls: isHls,
       mimeType: isHls
         ? "application/vnd.apple.mpegurl"
-        : source.Container
-          ? `video/${source.Container}`
-          : undefined,
+        : playMethod === "DirectStream" || (playMethod === "Transcode" && !isHls)
+          ? "video/mp4"
+          : source.Container
+            ? `video/${source.Container}`
+            : undefined,
       playSessionId,
       mediaSourceId: source.Id,
       itemId,
@@ -490,6 +508,7 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
       isPaused?: boolean;
       playSessionId?: string;
       mediaSourceId?: string;
+      playMethod?: "DirectPlay" | "DirectStream" | "Transcode";
       event: "start" | "progress" | "stopped";
     },
   ): Promise<void> {
@@ -500,16 +519,56 @@ export class JellyfinProvider implements LibraryProvider, PlaybackProvider {
           ? "/Sessions/Playing/Stopped"
           : "/Sessions/Playing/Progress";
 
-    await this.httpFor(userContext).request("POST", path, {
-      body: {
-        ItemId: input.itemId,
-        PositionTicks: Math.round(input.positionSeconds * 10_000_000),
-        IsPaused: input.isPaused ?? false,
-        PlaySessionId: input.playSessionId,
-        MediaSourceId: input.mediaSourceId,
-      },
-      allowStatuses: [200, 204],
-    });
+    // Jellyfin 10.x expects a fuller playback session payload; a bare Progress
+    // body often 500s ("Error processing request") and must not break the client.
+    const positionTicks = Math.round(Math.max(0, input.positionSeconds) * 10_000_000);
+    const body = {
+      ItemId: input.itemId,
+      PositionTicks: positionTicks,
+      IsPaused: input.isPaused ?? false,
+      CanSeek: true,
+      IsMuted: false,
+      PlayMethod: input.playMethod ?? "Transcode",
+      RepeatMode: "RepeatNone",
+      PlaybackRate: 1,
+      VolumeLevel: 100,
+      ...(input.playSessionId ? { PlaySessionId: input.playSessionId } : {}),
+      ...(input.mediaSourceId ? { MediaSourceId: input.mediaSourceId } : {}),
+    };
+
+    try {
+      await this.httpFor(userContext).request("POST", path, {
+        body,
+        allowStatuses: [200, 204],
+      });
+      return;
+    } catch {
+      // Sessions/Playing* often 500s when there is no live session (reload,
+      // DirectPlay/Transcode mismatch, or cache/IPTV wrongly routed here).
+      // Prefer UserData so Continue Watching still advances; never throw for
+      // progress/stopped — the player soft-acks either way.
+    }
+
+    if (input.event === "start") {
+      // Start is best-effort; Progress will land via UserData.
+      return;
+    }
+
+    try {
+      await this.httpFor(userContext).request(
+        "POST",
+        `/Users/${encodeURIComponent(userContext.jellyfinUserId)}/Items/${encodeURIComponent(input.itemId)}/UserData`,
+        {
+          body: {
+            PlaybackPositionTicks: positionTicks,
+            Played: false,
+          },
+          allowStatuses: [200, 204],
+        },
+      );
+    } catch {
+      /* ignore — Continue Watching may lag until the next successful write */
+    }
   }
 
   /** Trigger a full library scan (admin/user depending on Jellyfin permissions). */
@@ -948,15 +1007,12 @@ function subtitleLabelFromStream(
   return extras.length ? `${base} · ${extras.join(" · ")}` : base;
 }
 
-/**
- * Prefer Jellyfin's suggestion, but never DirectPlay unsafe audio codecs.
- * DirectStream / Transcode paths force AAC in openStream().
- */
-function resolvePlayMethodForBrowser(source: {
+type JellyfinMediaSourceHint = {
   SupportsDirectPlay?: boolean;
   SupportsDirectStream?: boolean;
   SupportsTranscoding?: boolean;
   TranscodingUrl?: string | null;
+  Container?: string | null;
   DefaultAudioStreamIndex?: number | null;
   MediaStreams?: Array<{
     Type?: string;
@@ -964,7 +1020,15 @@ function resolvePlayMethodForBrowser(source: {
     Index?: number;
     IsDefault?: boolean;
   }> | null;
-}): "DirectPlay" | "DirectStream" | "Transcode" {
+};
+
+/**
+ * Prefer Jellyfin's suggestion, but never DirectPlay unsafe audio codecs.
+ * DirectStream / Transcode paths force AAC in openStream().
+ */
+function resolvePlayMethodForBrowser(
+  source: JellyfinMediaSourceHint,
+): "DirectPlay" | "DirectStream" | "Transcode" {
   const method = resolvePlayMethod(source);
   if (method !== "DirectPlay") return method;
   if (isBrowserSafeAudio(defaultAudioCodec(source))) return "DirectPlay";
@@ -972,6 +1036,164 @@ function resolvePlayMethodForBrowser(source: {
   if (source.SupportsDirectStream) return "DirectStream";
   if (source.SupportsTranscoding) return "Transcode";
   return "DirectStream";
+}
+
+/**
+ * Native players: prefer a single progressive URL (DirectPlay / DirectStream)
+ * over HLS. HLS segment auth is unreliable on AVPlayer/ExoPlayer.
+ * iOS AVPlayer cannot play Matroska — remux via DirectStream (stream.mp4).
+ */
+function resolvePlayMethodForNative(
+  source: JellyfinMediaSourceHint,
+): "DirectPlay" | "DirectStream" | "Transcode" {
+  const method = resolvePlayMethod(source);
+  const container = (source.Container ?? "").toLowerCase();
+  const mkv = container.includes("mkv") || container.includes("matroska");
+  if (
+    method === "DirectPlay" &&
+    !mkv &&
+    isNativeSafeAudio(defaultAudioCodec(source))
+  ) {
+    return "DirectPlay";
+  }
+  if (source.SupportsDirectStream) return "DirectStream";
+  if (method === "DirectStream") return "DirectStream";
+  if (source.TranscodingUrl) return "Transcode";
+  if (source.SupportsTranscoding) return "Transcode";
+  return "DirectStream";
+}
+
+function isNativeSafeAudio(codec: string | undefined): boolean {
+  if (!codec) return true;
+  const c = codec.toLowerCase();
+  // iOS/Android handle these in DirectPlay containers; DTS/TrueHD still need remux.
+  return ["aac", "mp3", "ac3", "eac3", "flac", "alac", "opus"].includes(c);
+}
+
+/** iOS/Android profile — HEVC Main10 DirectPlay so we avoid HLS when possible. */
+function nativeDeviceProfile(
+  kind: "ios" | "android",
+  maxStreamingBitrate: number,
+) {
+  // Broad audio list so Jellyfin does not force video transcode for DTS/TrueHD;
+  // resolvePlayMethodForNative remuxes those via DirectStream instead of HLS.
+  const videoAudio = "aac,mp3,ac3,eac3,flac,alac,opus,dts,truehd,pcm";
+  const videoCodecs = "h264,hevc,mpeg4,vp9";
+  const maxBitrate = clampStreamingBitrate(maxStreamingBitrate);
+  return {
+    Name: kind === "ios" ? "Streamerr iOS" : "Streamerr Android",
+    MaxStreamingBitrate: maxBitrate,
+    MaxStaticBitrate: maxBitrate,
+    MusicStreamingTranscodingBitrate: 384_000,
+    DirectPlayProfiles: [
+      {
+        Container: "mp4,m4v,mov",
+        Type: "Video",
+        VideoCodec: videoCodecs,
+        AudioCodec: videoAudio,
+      },
+      {
+        Container: "mkv",
+        Type: "Video",
+        VideoCodec: videoCodecs,
+        AudioCodec: videoAudio,
+      },
+      {
+        Container: "hls",
+        Type: "Video",
+        VideoCodec: "h264,hevc",
+        AudioCodec: "aac,ac3,eac3",
+      },
+      { Container: "mp3", Type: "Audio", AudioCodec: "mp3" },
+      { Container: "mp4,m4a,aac", Type: "Audio", AudioCodec: "aac" },
+    ],
+    TranscodingProfiles: [
+      // Prefer progressive remux over HLS — single URL auth works on AVPlayer.
+      {
+        Container: "mp4",
+        Type: "Video",
+        VideoCodec: "h264",
+        AudioCodec: "aac",
+        Protocol: "http",
+        Context: "Streaming",
+        MaxAudioChannels: "2",
+      },
+      {
+        Container: "ts",
+        Type: "Video",
+        VideoCodec: "h264",
+        AudioCodec: "aac",
+        Protocol: "hls",
+        Context: "Streaming",
+        MaxAudioChannels: "2",
+        MinSegments: 2,
+        BreakOnNonKeyFrames: false,
+      },
+    ],
+    ContainerProfiles: [],
+    CodecProfiles: [
+      {
+        Type: "Video",
+        Codec: "hevc",
+        Conditions: [
+          {
+            Condition: "EqualsAny",
+            Property: "VideoProfile",
+            Value: "main|main 10",
+            IsRequired: false,
+          },
+          {
+            Condition: "LessThanEqual",
+            Property: "VideoBitDepth",
+            Value: "10",
+            IsRequired: false,
+          },
+          {
+            Condition: "LessThanEqual",
+            Property: "Width",
+            Value: "3840",
+            IsRequired: false,
+          },
+          {
+            Condition: "LessThanEqual",
+            Property: "Height",
+            Value: "2160",
+            IsRequired: false,
+          },
+        ],
+      },
+      {
+        Type: "Video",
+        Codec: "h264",
+        Conditions: [
+          {
+            Condition: "EqualsAny",
+            Property: "VideoProfile",
+            Value: "high|main|baseline|constrained baseline",
+            IsRequired: false,
+          },
+          {
+            Condition: "LessThanEqual",
+            Property: "VideoBitDepth",
+            Value: "8",
+            IsRequired: false,
+          },
+        ],
+      },
+    ],
+    // Embed ASS so Jellyfin allows DirectPlay (Drop/omit forces Transcode).
+    // Do NOT Encode/burn PGS — that forces HLS. Native sideloads VTT separately.
+    SubtitleProfiles: [
+      { Format: "vtt", Method: "External" },
+      { Format: "srt", Method: "External" },
+      { Format: "subrip", Method: "External" },
+      { Format: "ass", Method: "Embed" },
+      { Format: "ssa", Method: "Embed" },
+      { Format: "pgssub", Method: "Drop" },
+      { Format: "pgs", Method: "Drop" },
+    ],
+    ResponseProfiles: [],
+  };
 }
 
 /**

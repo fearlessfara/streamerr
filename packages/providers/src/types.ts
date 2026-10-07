@@ -52,6 +52,11 @@ export interface PlaybackProvider extends MediaProvider {
       audioStreamIndex?: number;
       /** Optional client-measured throughput cap (bits/s). */
       maxStreamingBitrate?: number;
+      /**
+       * Client capability profile. `ios`/`android` prefer DirectPlay/DirectStream
+       * (single URL) so native players are not stuck on HLS segment auth.
+       */
+      deviceProfile?: "web" | "ios" | "android";
     },
   ): Promise<PlaybackSource | null>;
   reportProgress(
@@ -62,6 +67,7 @@ export interface PlaybackProvider extends MediaProvider {
       isPaused?: boolean;
       playSessionId?: string;
       mediaSourceId?: string;
+      playMethod?: "DirectPlay" | "DirectStream" | "Transcode";
       event: "start" | "progress" | "stopped";
     },
   ): Promise<void>;
@@ -73,6 +79,8 @@ export interface DiscoveryProvider extends MediaProvider {
   discoverTv?(opts?: { page?: number; genreId?: number }): Promise<Media[]>;
   search(query: string, opts?: { page?: number }): Promise<Media[]>;
   getDetails?(mediaType: "movie" | "tv", tmdbId: number): Promise<Media | null>;
+  /** Similar / related titles (More Like This). */
+  getSimilar?(mediaType: "movie" | "tv", tmdbId: number, opts?: { page?: number }): Promise<Media[]>;
 }
 
 export interface MediaRequestSummary {
@@ -124,6 +132,8 @@ export interface LiveTvProvider extends MediaProvider {
     pageSize?: number;
     favouritesOnly?: boolean;
     favouriteUuids?: string[];
+    /** Default: number then name. */
+    sort?: "number" | "name" | "name_desc";
   }): Promise<{ items: LiveChannel[]; total: number }>;
   getChannel?(uuid: string): Promise<LiveChannel | null>;
   getNowNext(channelUuids: string[]): Promise<LiveNowNext[]>;

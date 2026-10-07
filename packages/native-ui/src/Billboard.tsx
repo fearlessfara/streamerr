@@ -1,10 +1,13 @@
-import { StyleSheet, Text, View } from "react-native";
+import { createElement, useEffect, useState } from "react";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { useQuery } from "@tanstack/react-query";
 import type { Media } from "@streamerr/shared";
-import { canPlayMedia, formatRuntime } from "@streamerr/client";
+import { canPlayMedia, formatRuntime, mediaByTmdb } from "@streamerr/client";
 import { Artwork } from "./Artwork.js";
 import { PillButton } from "./Button.js";
 import type { NativeLayout } from "./layout.js";
-import { textShadowStyle, webBg, webGradient } from "./webStyle.js";
+import { Shade } from "./Shade.js";
+import { textShadowStyle, webBg } from "./webStyle.js";
 
 function metaLine(media: Media): string {
   const kind =
@@ -22,6 +25,7 @@ export function Billboard({
   onPlay,
   onInfo,
   bufferStatus,
+  focusMode = "touch",
 }: {
   media: Media;
   layout: NativeLayout;
@@ -31,10 +35,49 @@ export function Billboard({
   onPlay: () => void;
   onInfo: () => void;
   bufferStatus?: string | null;
+  focusMode?: "touch" | "tv";
 }) {
   const art = media.metadata.backdropUrl || media.metadata.posterUrl;
   const inset = variant === "inset";
   const playable = canPlayMedia(media);
+  const tv = focusMode === "tv";
+  const titleSize = tv ? (inset ? 40 : 48) : inset ? 42 : 52;
+  const detailType =
+    media.identity.mediaType === "movie" || media.identity.mediaType === "tv"
+      ? media.identity.mediaType
+      : media.identity.mediaType === "episode"
+        ? "tv"
+        : null;
+  const detailTmdb = media.identity.tmdbId;
+  const detailsQuery = useQuery({
+    queryKey: ["billboard", "trailer", detailType, detailTmdb],
+    queryFn: () => mediaByTmdb(detailType!, detailTmdb!),
+    enabled:
+      Platform.OS === "web" &&
+      !tv &&
+      Boolean(detailType && detailTmdb) &&
+      !media.metadata.trailerYoutubeKey,
+    staleTime: 60 * 60_000,
+  });
+  const youtubeKey =
+    media.metadata.trailerYoutubeKey ??
+    detailsQuery.data?.media.metadata.trailerYoutubeKey;
+  const canPreview = Platform.OS === "web" && Boolean(youtubeKey) && !tv;
+  const [trailerOn, setTrailerOn] = useState(false);
+  const [muted, setMuted] = useState(true);
+
+  // Delay trailer start slightly so the still art paints first (Netflix-like).
+  useEffect(() => {
+    setTrailerOn(false);
+    setMuted(true);
+    if (!canPreview) return;
+    const t = setTimeout(() => setTrailerOn(true), 1200);
+    return () => clearTimeout(t);
+  }, [canPreview, youtubeKey, media.identity.tmdbId]);
+
+  const embedSrc = youtubeKey
+    ? `https://www.youtube.com/embed/${encodeURIComponent(youtubeKey)}?autoplay=1&mute=${muted ? 1 : 0}&controls=0&rel=0&modestbranding=1&playsinline=1&loop=1&playlist=${encodeURIComponent(youtubeKey)}`
+    : null;
 
   return (
     <View
@@ -51,25 +94,36 @@ export function Billboard({
       ]}
     >
       <Artwork url={art} maxWidth={1600} style={styles.image} />
-      <View
-        style={[
-          styles.shade,
-          webGradient("linear-gradient(180deg, rgba(0,0,0,0.35) 0%, transparent 28%, transparent 46%, rgba(0,0,0,0.55) 72%, #000 100%)"),
-        ]}
-      />
-      <View
-        style={[
-          styles.shade,
-          webGradient("linear-gradient(90deg, rgba(0,0,0,0.78) 0%, rgba(0,0,0,0.28) 42%, transparent 68%)"),
-        ]}
-      />
+      {canPreview && trailerOn && embedSrc ? (
+        <View style={styles.trailer} pointerEvents="none">
+          {createElement("iframe", {
+            title: `${media.metadata.title} trailer`,
+            src: embedSrc,
+            allow: "autoplay; encrypted-media",
+            style: {
+              position: "absolute",
+              top: "-10%",
+              left: "-10%",
+              width: "120%",
+              height: "120%",
+              border: 0,
+              pointerEvents: "none",
+            },
+          })}
+        </View>
+      ) : null}
+      <Shade kind="billboard-vertical" />
+      <Shade kind="billboard-left" />
       <View style={[styles.copy, { paddingHorizontal: inset ? 36 : layout.pageX }]}>
-        <Text style={[styles.title, inset ? styles.titleInset : null]} numberOfLines={2}>
+        <Text
+          style={[styles.title, { fontSize: titleSize, lineHeight: titleSize + 2 }, inset ? styles.titleInset : null]}
+          numberOfLines={2}
+        >
           {media.metadata.title}
         </Text>
         <Text style={styles.meta}>{metaLine(media)}</Text>
         {media.metadata.overview ? (
-          <Text style={styles.overview} numberOfLines={3}>
+          <Text style={styles.overview} numberOfLines={tv ? 2 : 3}>
             {media.metadata.overview}
           </Text>
         ) : null}
@@ -80,8 +134,19 @@ export function Billboard({
             label={playLabel}
             tone="light"
             onPress={playable ? onPlay : onInfo}
+            showFocusRing={tv}
+            hasTVPreferredFocus={tv || undefined}
           />
-          <PillButton icon="info" label="More Info" tone="glass" onPress={onInfo} />
+          <PillButton icon="info" label="More Info" tone="glass" onPress={onInfo} showFocusRing={tv} />
+          {canPreview && trailerOn ? (
+            <Pressable
+              onPress={() => setMuted((m) => !m)}
+              style={styles.muteBtn}
+              accessibilityLabel={muted ? "Unmute trailer" : "Mute trailer"}
+            >
+              <Text style={styles.muteText}>{muted ? "Sound" : "Mute"}</Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
     </View>
@@ -95,17 +160,18 @@ const styles = StyleSheet.create({
     backgroundColor: webBg,
   },
   image: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
-  shade: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, pointerEvents: "none" },
+  trailer: {
+    ...StyleSheet.absoluteFill,
+    zIndex: 1,
+  },
   copy: { paddingBottom: 64, maxWidth: 640, zIndex: 2 },
   title: {
     color: "#fff",
-    fontSize: 52,
-    lineHeight: 54,
     fontWeight: "800",
     letterSpacing: -0.8,
     ...textShadowStyle(0, 2, 12, "rgba(0,0,0,0.65)"),
   },
-  titleInset: { fontSize: 42, lineHeight: 44 },
+  titleInset: {},
   meta: { color: "#fff", fontSize: 15, fontWeight: "600", marginTop: 12 },
   overview: {
     color: "#fff",
@@ -116,5 +182,16 @@ const styles = StyleSheet.create({
     ...textShadowStyle(0, 1, 8, "rgba(0,0,0,0.8)"),
   },
   buffer: { color: "#fff", marginTop: 8, fontSize: 14 },
-  actions: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 16 },
+  actions: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 16, alignItems: "center" },
+  muteBtn: {
+    height: 40,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.7)",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.35)",
+  },
+  muteText: { color: "#fff", fontSize: 13, fontWeight: "600" },
 });

@@ -4,12 +4,24 @@ import { resolvePreferredAction } from "@streamerr/shared";
 import type { AppDb } from "../db/client.js";
 import { playbackProgress } from "../db/schema.js";
 
+type ProgressProvider = "dispatcharr" | "jellyfin" | "cache";
+
 function progressId(userId: string, identity: MediaIdentity): string {
-  const base = `${userId}:${identity.mediaType}:${identity.tmdbId ?? "x"}`;
-  if (identity.mediaType === "episode") {
-    return `${base}:s${identity.seasonNumber ?? 0}e${identity.episodeNumber ?? 0}`;
+  if (identity.tmdbId != null) {
+    const base = `${userId}:${identity.mediaType}:${identity.tmdbId}`;
+    if (identity.mediaType === "episode") {
+      return `${base}:s${identity.seasonNumber ?? 0}e${identity.episodeNumber ?? 0}`;
+    }
+    return base;
   }
-  return base;
+  if (identity.jellyfinItemId) {
+    return `${userId}:jellyfin:${identity.jellyfinItemId}`;
+  }
+  return `${userId}:unknown`;
+}
+
+function canStore(identity: MediaIdentity): boolean {
+  return identity.tmdbId != null || Boolean(identity.jellyfinItemId);
 }
 
 function rowToMedia(row: typeof playbackProgress.$inferSelect): Media {
@@ -22,17 +34,33 @@ function rowToMedia(row: typeof playbackProgress.$inferSelect): Media {
   const fallbackTitle =
     identity.mediaType === "episode"
       ? `S${identity.seasonNumber ?? 0}E${identity.episodeNumber ?? 0}`
-      : `Title ${identity.tmdbId}`;
-  const availability = [
-    {
-      provider: "dispatcharr" as const,
-      available: true,
-      canPlay: true,
-      candidates: [],
-      positionSeconds: row.positionSeconds,
-      durationSeconds: row.durationSeconds ?? undefined,
-    },
-  ];
+      : `Title ${identity.tmdbId ?? "unknown"}`;
+
+  const provider = (row.provider as ProgressProvider) || "dispatcharr";
+  // Cache rows reuse the dispatcharr availability shape (has positionSeconds) so
+  // Continue Watching can surface a resume offset.
+  const availability =
+    provider === "jellyfin"
+      ? [
+          {
+            provider: "jellyfin" as const,
+            available: true,
+            canPlay: true,
+            positionSeconds: row.positionSeconds,
+            durationSeconds: row.durationSeconds ?? undefined,
+          },
+        ]
+      : [
+          {
+            provider: "dispatcharr" as const,
+            available: true,
+            canPlay: true,
+            candidates: [],
+            positionSeconds: row.positionSeconds,
+            durationSeconds: row.durationSeconds ?? undefined,
+          },
+        ];
+
   return {
     identity,
     metadata: {
@@ -51,7 +79,7 @@ export class IptvProgressStore {
     userId: string,
     identity: MediaIdentity,
   ): { positionSeconds: number; durationSeconds?: number; completed: boolean } | null {
-    if (!identity.tmdbId) return null;
+    if (!canStore(identity)) return null;
     const id = progressId(userId, identity);
     const row = this.db
       .select()
@@ -75,11 +103,12 @@ export class IptvProgressStore {
       title?: string;
       posterUrl?: string;
       completed?: boolean;
+      provider?: ProgressProvider;
       /** When true, do not overwrite a larger stored position with 0 / a smaller value. */
       preserveHigherPosition?: boolean;
     },
   ): void {
-    if (!input.identity.tmdbId) return;
+    if (!canStore(input.identity)) return;
     const id = progressId(userId, input.identity);
     const now = new Date();
     const incoming = Math.max(0, Math.floor(input.positionSeconds));
@@ -92,6 +121,7 @@ export class IptvProgressStore {
       input.completed !== undefined
         ? Boolean(input.completed)
         : Boolean(existing?.completed);
+    const provider = input.provider ?? "dispatcharr";
     this.db
       .insert(playbackProgress)
       .values({
@@ -101,7 +131,7 @@ export class IptvProgressStore {
         mediaType: input.identity.mediaType,
         seasonNumber: input.identity.seasonNumber,
         episodeNumber: input.identity.episodeNumber,
-        provider: "dispatcharr",
+        provider,
         positionSeconds,
         durationSeconds:
           input.durationSeconds !== undefined
@@ -121,6 +151,7 @@ export class IptvProgressStore {
               ? Math.floor(input.durationSeconds)
               : existing?.durationSeconds,
           completed,
+          provider,
           ...(input.title ? { title: input.title } : {}),
           ...(input.posterUrl ? { posterUrl: input.posterUrl } : {}),
           updatedAt: now,
@@ -130,7 +161,7 @@ export class IptvProgressStore {
   }
 
   /**
-   * In-progress IPTV episodes for a series (most recently watched first).
+   * In-progress episodes for a series (most recently watched first).
    * Used to show Resume on series details and seek into the right episode.
    */
   listInProgressForSeries(
@@ -150,7 +181,6 @@ export class IptvProgressStore {
       .all()
       .filter(
         (r) =>
-          r.provider === "dispatcharr" &&
           r.mediaType === "episode" &&
           r.tmdbId === seriesTmdbId &&
           (r.positionSeconds ?? 0) > 30 &&
@@ -173,7 +203,7 @@ export class IptvProgressStore {
       .where(and(eq(playbackProgress.userId, userId), eq(playbackProgress.completed, false)))
       .orderBy(desc(playbackProgress.updatedAt))
       .all()
-      .filter((r) => r.provider === "dispatcharr" && (r.positionSeconds ?? 0) > 30)
+      .filter((r) => (r.positionSeconds ?? 0) > 30)
       .slice(0, limit);
 
     return rows.map(rowToMedia);

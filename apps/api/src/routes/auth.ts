@@ -37,16 +37,32 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
       };
 
       if (ctx.jellyfin instanceof MockJellyfinProvider) {
-        authResult = await ctx.jellyfin.authenticate();
-      } else if (ctx.jellyfin instanceof JellyfinProvider) {
+        const err = new Error(
+          "API is in mock mode — set STREAMERR_USE_MOCKS=false and JELLYFIN_URL to use real Jellyfin",
+        ) as Error & { statusCode: number };
+        err.statusCode = 503;
+        throw err;
+      }
+      if (!(ctx.jellyfin instanceof JellyfinProvider)) {
+        throw new Error("Jellyfin provider missing authenticate");
+      }
+      try {
         authResult = await ctx.jellyfin.authenticate({
           username: body.username,
           password: body.password,
           deviceId,
           deviceName: body.deviceName,
         });
-      } else {
-        throw new Error("Jellyfin provider missing authenticate");
+      } catch (err) {
+        const status = (err as { statusCode?: number }).statusCode;
+        if (status === 401) {
+          const rejected = new Error("Wrong Jellyfin username or password") as Error & {
+            statusCode: number;
+          };
+          rejected.statusCode = 401;
+          throw rejected;
+        }
+        throw err;
       }
 
       const session = await ctx.sessions.create({

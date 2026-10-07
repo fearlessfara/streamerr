@@ -34,6 +34,15 @@ describe("rewriteHlsPlaylist", () => {
     );
   });
 
+  it("embeds session id on proxy URLs for native HLS auth", () => {
+    const out = rewriteHlsPlaylist("#EXTM3U\nseg0.ts\n", {
+      path: "/Videos/abc/master.m3u8",
+      sessionId: "sess-1",
+    });
+    expect(out).toContain(toHlsProxyUrl("/Videos/abc/seg0.ts", "sess-1"));
+    expect(out).toContain("streamerr_session=sess-1");
+  });
+
   it("rewrites URI= attributes on stream-inf / media tags", () => {
     const input = [
       "#EXTM3U",

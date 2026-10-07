@@ -74,12 +74,27 @@ function joinUrl(baseUrl: string, path: string): string {
   return `${origin}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+function inferDeviceProfile(): "web" | "ios" | "android" {
+  try {
+    // React Native
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { Platform } = require("react-native") as { Platform?: { OS?: string } };
+    if (Platform?.OS === "ios") return "ios";
+    if (Platform?.OS === "android") return "android";
+  } catch {
+    /* web / node */
+  }
+  return "web";
+}
+
 export class StreamerrClient {
   readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly credentials?: "omit" | "same-origin" | "include";
   private readonly getSessionId?: StreamerrClientOptions["getSessionId"];
   private readonly setSessionId?: StreamerrClientOptions["setSessionId"];
+  /** In-memory session so the request after login never races AsyncStorage. */
+  private memorySessionId: string | null = null;
   readonly storage?: KeyValueStorage;
 
   constructor(opts: StreamerrClientOptions) {
@@ -95,8 +110,15 @@ export class StreamerrClient {
     return joinUrl(this.baseUrl, path);
   }
 
+  private async resolveSessionId(): Promise<string | null> {
+    if (this.memorySessionId) return this.memorySessionId;
+    const fromStore = (await this.getSessionId?.()) ?? null;
+    if (fromStore) this.memorySessionId = fromStore;
+    return fromStore;
+  }
+
   async sessionHeaders(): Promise<Record<string, string>> {
-    return sessionCookieHeader((await this.getSessionId?.()) ?? null);
+    return sessionCookieHeader(await this.resolveSessionId());
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -119,20 +141,34 @@ export class StreamerrClient {
     return data;
   }
 
-  login(input: { username: string; password: string; deviceId: string; deviceName: string }) {
-    return this.requestRaw<LoginResult>("/api/auth/login", {
+  async login(input: {
+    username: string;
+    password: string;
+    deviceId: string;
+    deviceName: string;
+  }) {
+    const { data, headers } = await this.requestRaw<LoginResult>("/api/auth/login", {
       method: "POST",
       body: JSON.stringify(input),
-    }).then(async ({ data, headers }) => {
-      const fromJson = data.sessionId;
-      const fromCookie = sessionIdFromSetCookie(headers.get("set-cookie"));
-      const sid = fromJson || fromCookie;
-      if (sid) {
-        data.sessionId = sid;
-        await this.setSessionId?.(sid);
-      }
-      return data;
     });
+    const fromJson = typeof data.sessionId === "string" ? data.sessionId.trim() : "";
+    const fromCookie = sessionIdFromSetCookie(headers.get("set-cookie"));
+    const sid = fromJson || fromCookie;
+    if (!sid) {
+      throw new Error(
+        `Login response from ${this.baseUrl} had no session id — point the app at the API on port 8787, not Metro/web`,
+      );
+    }
+    if (!this.setSessionId) {
+      throw new Error("Login succeeded but the API client has no session storage attached");
+    }
+    // Memory first — next me()/home() must not wait on AsyncStorage.
+    this.memorySessionId = sid;
+    data.sessionId = sid;
+    await this.setSessionId(sid);
+    // Prove this same client instance is accepted before callers navigate away.
+    await this.me();
+    return data;
   }
 
   private async requestRaw<T>(
@@ -160,6 +196,7 @@ export class StreamerrClient {
 
   async logout() {
     const result = await this.request<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
+    this.memorySessionId = null;
     await this.setSessionId?.(null);
     return result;
   }
@@ -212,6 +249,33 @@ export class StreamerrClient {
         durationSeconds?: number;
       } | null;
     }>(`/api/media/tv/${tmdbId}/episodes`);
+  }
+
+  mediaSimilar(type: "movie" | "tv", tmdbId: number) {
+    return this.request<{ items: Media[] }>(`/api/media/${type}/${tmdbId}/similar`);
+  }
+
+  myList() {
+    return this.request<{ items: Media[]; keys: string[] }>("/api/mylist");
+  }
+
+  myListHas(type: "movie" | "tv", tmdbId: number) {
+    return this.request<{ onList: boolean }>(
+      `/api/mylist/has?type=${type}&tmdbId=${tmdbId}`,
+    );
+  }
+
+  toggleMyList(type: "movie" | "tv", tmdbId: number) {
+    return this.request<{ items: string[]; onList: boolean }>("/api/mylist/toggle", {
+      method: "POST",
+      body: JSON.stringify({ type, tmdbId }),
+    });
+  }
+
+  discoverTrending(page = 1, mediaType?: "movie" | "tv") {
+    const qs = new URLSearchParams({ page: String(page) });
+    if (mediaType) qs.set("mediaType", mediaType);
+    return this.request<{ items: Media[] }>(`/api/discover/trending?${qs}`);
   }
 
   discoverMovies(page = 1, opts?: { genreId?: number }) {
@@ -335,6 +399,7 @@ export class StreamerrClient {
       startPositionSeconds?: number;
       audioStreamIndex?: number;
       maxStreamingBitrate?: number;
+      deviceProfile?: "web" | "ios" | "android";
     },
   ) {
     return this.request<PlaybackResolveResult>("/api/playback/resolve", {
@@ -344,6 +409,7 @@ export class StreamerrClient {
         startPositionSeconds: opts?.startPositionSeconds,
         audioStreamIndex: opts?.audioStreamIndex,
         maxStreamingBitrate: opts?.maxStreamingBitrate,
+        deviceProfile: opts?.deviceProfile,
       }),
     });
   }
@@ -405,6 +471,9 @@ export class StreamerrClient {
     identity: MediaIdentity,
     opts?: {
       meta?: { durationSeconds?: number; runtimeMinutes?: number } | null;
+      /** Continue Watching / reload resume offset. */
+      startPositionSeconds?: number;
+      deviceProfile?: "web" | "ios" | "android";
       onBuffering?: (info: {
         acquisitionId: string;
         bytesDownloaded?: number;
@@ -414,8 +483,13 @@ export class StreamerrClient {
   ): Promise<PlaybackSource> {
     const started = Date.now();
     const maxStreamingBitrate = await this.measurePlaybackBitrate(identity.jellyfinItemId);
+    const resolveOpts = {
+      maxStreamingBitrate,
+      startPositionSeconds: opts?.startPositionSeconds,
+      deviceProfile: opts?.deviceProfile ?? inferDeviceProfile(),
+    };
 
-    const first = await this.resolvePlayback(identity, { maxStreamingBitrate });
+    const first = await this.resolvePlayback(identity, resolveOpts);
     if (first.status === "ready") {
       return withCatalogueDuration(first.source, opts?.meta);
     }
@@ -437,7 +511,7 @@ export class StreamerrClient {
         totalBytes: item.totalBytes,
       });
       if (item.playbackAvailable) {
-        const ready = await this.resolvePlayback(identity, { maxStreamingBitrate });
+        const ready = await this.resolvePlayback(identity, resolveOpts);
         if (ready.status === "ready") {
           return withCatalogueDuration(ready.source, opts?.meta);
         }
@@ -473,12 +547,17 @@ export class StreamerrClient {
     event: "start" | "progress" | "stopped";
     playSessionId?: string;
     mediaSourceId?: string;
+    playMethod?: "DirectPlay" | "DirectStream" | "Transcode";
     isPaused?: boolean;
+    /** Used for Streamerr write-through Continue Watching when Jellyfin is slow/down. */
+    identity?: MediaIdentity;
+    durationSeconds?: number;
+    title?: string;
   }) {
     return this.request<{ ok: boolean }>("/api/playback/progress", {
       method: "POST",
       body: JSON.stringify(body),
-    });
+    }).catch(() => ({ ok: false as const }));
   }
 
   reportIptvProgress(body: {
@@ -491,7 +570,7 @@ export class StreamerrClient {
     return this.request<{ ok: boolean }>("/api/playback/iptv-progress", {
       method: "POST",
       body: JSON.stringify(body),
-    });
+    }).catch(() => ({ ok: false as const }));
   }
 
   liveGroups() {
@@ -504,6 +583,7 @@ export class StreamerrClient {
     page?: number;
     pageSize?: number;
     favouritesOnly?: boolean;
+    sort?: "number" | "name" | "name_desc";
   }) {
     const qs = new URLSearchParams();
     if (opts?.groupId) qs.set("groupId", opts.groupId);
@@ -511,6 +591,7 @@ export class StreamerrClient {
     if (opts?.page) qs.set("page", String(opts.page));
     if (opts?.pageSize) qs.set("pageSize", String(opts.pageSize));
     if (opts?.favouritesOnly) qs.set("favouritesOnly", "1");
+    if (opts?.sort && opts.sort !== "number") qs.set("sort", opts.sort);
     const suffix = qs.toString() ? `?${qs}` : "";
     return this.request<{ items: LiveChannel[]; total: number; favourites: string[] }>(
       `/api/live/channels${suffix}`,
@@ -541,10 +622,13 @@ export class StreamerrClient {
     );
   }
 
-  playLiveChannel(uuid: string) {
+  playLiveChannel(uuid: string, opts?: { hls?: boolean }) {
     return this.request<{ source: PlaybackSource; title?: string; channel?: LiveChannel }>(
       `/api/live/play/${encodeURIComponent(uuid)}`,
-      { method: "POST" },
+      {
+        method: "POST",
+        body: JSON.stringify({ hls: Boolean(opts?.hls) }),
+      },
     );
   }
 }
@@ -556,13 +640,25 @@ export function createClient(opts: StreamerrClientOptions): StreamerrClient {
 }
 
 export function configureClient(opts: StreamerrClientOptions): StreamerrClient {
-  defaultClient = new StreamerrClient(opts);
+  const baseUrl = opts.baseUrl.replace(/\/$/, "");
+  // Re-attach with the same origin must keep the in-memory session (Metro reload /
+  // LoginScreen ensureClient races used to wipe it between login() and me()).
+  if (defaultClient && defaultClient.baseUrl === baseUrl) {
+    return defaultClient;
+  }
+  defaultClient = new StreamerrClient({ ...opts, baseUrl });
+  return defaultClient;
+}
+
+export function tryGetClient(): StreamerrClient | null {
   return defaultClient;
 }
 
 export function getClient(): StreamerrClient {
   if (!defaultClient) {
-    defaultClient = new StreamerrClient({ baseUrl: "", credentials: "include" });
+    throw new Error(
+      "No Streamerr API client configured. Open Change server and set http://<your-mac-lan-ip>:8787",
+    );
   }
   return defaultClient;
 }
@@ -610,6 +706,26 @@ export function mediaAvailability(type: "movie" | "tv", tmdbId: number) {
 
 export function seriesEpisodes(tmdbId: number) {
   return getClient().seriesEpisodes(tmdbId);
+}
+
+export function mediaSimilar(type: "movie" | "tv", tmdbId: number) {
+  return getClient().mediaSimilar(type, tmdbId);
+}
+
+export function myList() {
+  return getClient().myList();
+}
+
+export function myListHas(type: "movie" | "tv", tmdbId: number) {
+  return getClient().myListHas(type, tmdbId);
+}
+
+export function toggleMyList(type: "movie" | "tv", tmdbId: number) {
+  return getClient().toggleMyList(type, tmdbId);
+}
+
+export function discoverTrending(page = 1, mediaType?: "movie" | "tv") {
+  return getClient().discoverTrending(page, mediaType);
 }
 
 export function discoverMovies(page = 1, opts?: { genreId?: number }) {
@@ -718,6 +834,6 @@ export function toggleLiveFavourite(uuid: string) {
   return getClient().toggleLiveFavourite(uuid);
 }
 
-export function playLiveChannel(uuid: string) {
-  return getClient().playLiveChannel(uuid);
+export function playLiveChannel(uuid: string, opts?: { hls?: boolean }) {
+  return getClient().playLiveChannel(uuid, opts);
 }

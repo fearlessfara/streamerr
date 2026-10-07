@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { listRequests } from "@streamerr/client";
 import { ListSkeleton } from "../Skeleton.js";
 import { colors } from "../theme.js";
+import { webBg } from "../webStyle.js";
 import type { ScreenChromeProps } from "./types.js";
 
 export function RequestsScreen({ nav, header }: Pick<ScreenChromeProps, "nav" | "header">) {
@@ -45,7 +46,7 @@ export function RequestsScreen({ nav, header }: Pick<ScreenChromeProps, "nav" | 
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: colors.bg },
+  page: { flex: 1, backgroundColor: webBg },
   body: { flex: 1, paddingHorizontal: 16 },
   empty: { color: colors.muted },
   row: {

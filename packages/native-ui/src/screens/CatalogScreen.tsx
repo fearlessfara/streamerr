@@ -85,6 +85,7 @@ export function CatalogScreen({
             media={featured}
             layout={layout}
             variant="inset"
+            focusMode={focusMode}
             playLabel={
               playMedia.isPending ? bufferStatus || "Resolving…" : actionLabel(featured).replace(/^▶\s*/, "")
             }

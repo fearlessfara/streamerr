@@ -33,6 +33,42 @@ type SeerrCreditLike = {
   order?: number | null;
 };
 
+/** Prefer an official YouTube Trailer from Seerr relatedVideos. */
+export function pickTrailer(details: {
+  relatedVideos?: Array<{
+    url?: string;
+    key?: string;
+    type?: string;
+    site?: string;
+  }> | null;
+}): { trailerUrl?: string; trailerYoutubeKey?: string } {
+  const videos = details.relatedVideos ?? [];
+  const ranked = [...videos].sort((a, b) => {
+    const score = (v: (typeof videos)[number]) => {
+      let s = 0;
+      if (/trailer/i.test(v.type ?? "")) s += 4;
+      if (/youtube/i.test(v.site ?? "")) s += 2;
+      if (/official/i.test(v.type ?? "")) s += 1;
+      return s;
+    };
+    return score(b) - score(a);
+  });
+  for (const v of ranked) {
+    const key =
+      v.key?.trim() ||
+      (typeof v.url === "string"
+        ? /(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{6,})/i.exec(v.url)?.[1]
+        : undefined);
+    if (!key) continue;
+    if (v.site && !/youtube/i.test(v.site) && !v.url?.includes("youtu")) continue;
+    return {
+      trailerYoutubeKey: key,
+      trailerUrl: `https://www.youtube.com/watch?v=${key}`,
+    };
+  }
+  return {};
+}
+
 function creditPerson(
   person: SeerrCreditLike,
   role?: string | null,
@@ -186,6 +222,7 @@ export function mapMovieDetailsToMedia(details: SeerrMovieDetails): Media {
   const seerrAvail = mapMediaInfoToRequestAvailability(details.mediaInfo);
   const availability = [seerrAvail];
   const extras = mapCredits({ ...details, mediaType: "movie" });
+  const trailer = pickTrailer(details);
   return {
     identity: {
       tmdbId: details.id,
@@ -201,6 +238,7 @@ export function mapMovieDetailsToMedia(details: SeerrMovieDetails): Media {
       backdropUrl: tmdbImageUrl(details.backdropPath, "w1280"),
       runtimeMinutes: details.runtime ?? undefined,
       ...extras,
+      ...trailer,
     },
     availability,
     preferredAction: resolvePreferredAction(availability),
@@ -211,6 +249,7 @@ export function mapTvDetailsToMedia(details: SeerrTvDetails): Media {
   const seerrAvail = mapMediaInfoToRequestAvailability(details.mediaInfo);
   const availability = [seerrAvail];
   const extras = mapCredits({ ...details, mediaType: "tv" });
+  const trailer = pickTrailer(details);
   return {
     identity: {
       tmdbId: details.id,
@@ -227,6 +266,7 @@ export function mapTvDetailsToMedia(details: SeerrTvDetails): Media {
       runtimeMinutes: details.episodeRunTime?.find((n) => n > 0),
       seriesStatus: details.status || undefined,
       ...extras,
+      ...trailer,
     },
     availability,
     preferredAction: resolvePreferredAction(availability),

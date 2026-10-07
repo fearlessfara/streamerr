@@ -8,17 +8,19 @@ export type LiveChannelRef = {
 };
 
 export type PlayParams = {
-  source: PlaybackSource;
+  /** Present when navigating in-app; omitted on reload and re-resolved from identity/channel. */
+  source?: PlaybackSource;
   title?: string;
   live?: boolean;
   identity?: MediaIdentity;
   channelUuid?: string;
   liveChannels?: LiveChannelRef[];
+  /** From `?p=` on reload — seconds into the title. */
+  resumeSeconds?: number;
 };
 
 export type RootStackParamList = {
   Boot: undefined;
-  Server: { change?: boolean } | undefined;
   Login: undefined;
   Home: undefined;
   Movies: undefined;

@@ -1,5 +1,6 @@
 export { colors, type NativeColors } from "./theme.js";
-export { webBg, webGradient, textShadowStyle } from "./webStyle.js";
+export { webBg, webGradient, textShadowStyle, HOVER_ROOM, FOCUS_ROOM } from "./webStyle.js";
+export { Shade } from "./Shade.js";
 export type { NativeLayout } from "./layout.js";
 export {
   SkeletonBlock,

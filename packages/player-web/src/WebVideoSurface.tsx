@@ -60,6 +60,17 @@ export function WebVideoSurface(props: VideoSurfaceProps) {
     };
   }, []);
 
+  const seekCb = useRef(props.onSeekRequest);
+  seekCb.current = props.onSeekRequest;
+  const progressCb = useRef(props.onProgress);
+  progressCb.current = props.onProgress;
+  const loadCb = useRef(props.onLoad);
+  loadCb.current = props.onLoad;
+  const endCb = useRef(props.onEnd);
+  endCb.current = props.onEnd;
+  const errorCb = useRef(props.onError);
+  errorCb.current = props.onError;
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -73,12 +84,13 @@ export function WebVideoSurface(props: VideoSurfaceProps) {
       source,
       paused: props.paused,
       startPosition: props.startPositionSeconds,
-      onProgress: props.onProgress,
-      onLoad: props.onLoad,
-      onEnd: props.onEnd,
-      onError: props.onError,
+      onProgress: (info) => progressCb.current(info),
+      onLoad: (info) => loadCb.current?.(info),
+      onEnd: () => endCb.current(),
+      onError: (msg) => errorCb.current(msg),
     });
-    props.onSeekRequest?.((seconds) => handleRef.current?.seek(seconds));
+    // Keep a stable seek bridge so PlayerScreen always has a live seek fn.
+    seekCb.current?.((seconds) => handleRef.current?.seek(seconds));
     if (props.paused) handleRef.current.pause();
     else handleRef.current.play();
     return () => {
@@ -88,6 +100,11 @@ export function WebVideoSurface(props: VideoSurfaceProps) {
     // Intentionally re-attach only when the stream identity changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.source.delivery.url, props.source.playSessionId]);
+
+  // Re-publish seek if the parent callback identity changes after attach.
+  useEffect(() => {
+    props.onSeekRequest?.((seconds) => handleRef.current?.seek(seconds));
+  }, [props.onSeekRequest]);
 
   useEffect(() => {
     if (!handleRef.current) return;

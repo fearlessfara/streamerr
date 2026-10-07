@@ -1,7 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { FlatList, StyleSheet, Text, TextInput, View } from "react-native";
+import { FlatList, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
-import { searchMedia } from "@streamerr/client";
+import { discoverTrending, home, searchMedia } from "@streamerr/client";
+import type { Media } from "@streamerr/shared";
+import { MediaRail } from "../MediaRail.js";
 import { PosterCard } from "../PosterCard.js";
 import { CatalogSkeleton } from "../Skeleton.js";
 import { fieldStyles } from "../fieldStyles.js";
@@ -9,6 +11,8 @@ import { openMedia } from "../media-nav.js";
 import { colors } from "../theme.js";
 import { webBg } from "../webStyle.js";
 import type { ScreenChromeProps } from "./types.js";
+
+type HomeRow = { id: string; title: string; items: Media[] };
 
 export function SearchScreen({
   layout,
@@ -32,8 +36,27 @@ export function SearchScreen({
     queryFn: () => searchMedia(q),
     enabled: q.trim().length >= 2,
   });
+  const discoverQuery = useQuery({
+    queryKey: ["search", "discover"],
+    queryFn: async () => {
+      const [homeRows, trending] = await Promise.all([
+        home().catch(() => ({ rows: [] as HomeRow[] })),
+        discoverTrending(1).catch(() => ({ items: [] as Media[] })),
+      ]);
+      const trendingRow = homeRows.rows.find((r: HomeRow) => r.id === "trending" || r.id === "top10");
+      return {
+        trending: trendingRow?.items?.length ? trendingRow.items : trending.items,
+        popularMovies: homeRows.rows.find((r: HomeRow) => r.id === "popular-movies")?.items ?? [],
+        popularSeries: homeRows.rows.find((r: HomeRow) => r.id === "popular-series")?.items ?? [],
+      };
+    },
+    enabled: q.trim().length < 2,
+    staleTime: 5 * 60_000,
+  });
   const tv = focusMode === "tv";
   const cols = layout.gridColumns ?? 2;
+  const open = (item: import("@streamerr/shared").Media) =>
+    openMedia({ navigate: (_n, params) => nav.openDetails(params) }, item);
 
   return (
     <View style={[styles.page, web && { backgroundColor: webBg }]}>
@@ -78,18 +101,61 @@ export function SearchScreen({
                 <PosterCard
                   media={item}
                   layout={layout}
-                  variant={web ? "hover" : "caption"}
+                  variant={web && tv ? "focus" : web ? "hover" : "caption"}
                   showFocusRing={tv}
-                  borderRadius={tv ? 4 : web ? 8 : 6}
-                  onPress={() =>
-                    openMedia({ navigate: (_n, params) => nav.openDetails(params) }, item)
-                  }
+                  borderRadius={web || tv ? 8 : 6}
+                  onPress={() => open(item)}
                 />
               </View>
             )}
           />
         ) : q.trim().length < 2 ? (
-          <Text style={styles.empty}>Type at least 2 characters.</Text>
+          <ScrollView
+            style={{ marginHorizontal: -layout.pageX }}
+            contentContainerStyle={{ paddingBottom: 48 }}
+          >
+            {(discoverQuery.data?.trending?.length ?? 0) > 0 ? (
+              <MediaRail
+                title="Trending Now"
+                items={discoverQuery.data!.trending}
+                layout={layout}
+                appearance={appearance}
+                showFocusRing={tv}
+                railIndex={0}
+                onOpen={open}
+              />
+            ) : null}
+            {(discoverQuery.data?.popularMovies?.length ?? 0) > 0 ? (
+              <MediaRail
+                title="Popular Movies"
+                items={discoverQuery.data!.popularMovies}
+                layout={layout}
+                appearance={appearance}
+                showFocusRing={tv}
+                railIndex={1}
+                onOpen={open}
+              />
+            ) : null}
+            {(discoverQuery.data?.popularSeries?.length ?? 0) > 0 ? (
+              <MediaRail
+                title="Popular Series"
+                items={discoverQuery.data!.popularSeries}
+                layout={layout}
+                appearance={appearance}
+                showFocusRing={tv}
+                railIndex={2}
+                onOpen={open}
+              />
+            ) : null}
+            {!discoverQuery.isPending &&
+            !(discoverQuery.data?.trending?.length ||
+              discoverQuery.data?.popularMovies?.length ||
+              discoverQuery.data?.popularSeries?.length) ? (
+              <Text style={[styles.empty, { paddingHorizontal: layout.pageX }]}>
+                Type at least 2 characters to search.
+              </Text>
+            ) : null}
+          </ScrollView>
         ) : null}
       </View>
     </View>

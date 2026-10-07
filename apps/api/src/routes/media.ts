@@ -50,6 +50,22 @@ export async function registerMediaRoutes(app: FastifyInstance, ctx: AppContext)
   });
 
   // More specific than /api/media/:type/:tmdbId — register first.
+  app.get("/api/media/:type/:tmdbId/similar", async (req) => {
+    await requireAuth(req);
+    const params = z
+      .object({
+        type: z.enum(["movie", "tv"]),
+        tmdbId: z.coerce.number().int().positive(),
+      })
+      .parse(req.params);
+    const discovery = ctx.seerr as import("@streamerr/providers").DiscoveryProvider;
+    const items = discovery.getSimilar
+      ? await discovery.getSimilar(params.type, params.tmdbId).catch(() => [])
+      : [];
+    const { enrichDiscoveryRow } = await import("../services/media-enrichment.js");
+    return { items: enrichDiscoveryRow(ctx, items) };
+  });
+
   app.get("/api/media/:type/:tmdbId/availability", async (req) => {
     const { userContext } = await requireAuth(req);
     const params = z

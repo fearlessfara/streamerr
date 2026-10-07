@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { StyleSheet } from "react-native";
+import { Platform, StyleSheet } from "react-native";
 import Video, {
   SelectedTrackType,
   TextTrackType,
@@ -7,7 +7,7 @@ import Video, {
   type OnProgressData,
   type VideoRef,
 } from "react-native-video";
-import { absoluteUrl, classifyPlayback, getClient } from "@streamerr/client";
+import { classifyPlayback, getClient, playbackMediaUrl } from "@streamerr/client";
 import type { VideoSurfaceProps } from "@streamerr/native-ui";
 import { textSubtitles } from "@streamerr/client";
 
@@ -22,11 +22,29 @@ export function NativeVideoSurface(props: VideoSurfaceProps) {
     props.onSeekRequest?.((seconds) => ref.current?.seek(seconds));
   }, [props.onSeekRequest]);
 
+  useEffect(() => {
+    props.onTransportReady?.({
+      setVolume: () => undefined,
+      getVolume: () => 1,
+      setMuted: () => undefined,
+      getMuted: () => false,
+      setRate: (rate) => {
+        // react-native-video exposes rate via imperative handle in v6 when available
+        const v = ref.current as VideoRef & { setRate?: (r: number) => void };
+        v?.setRate?.(rate);
+      },
+      getRate: () => 1,
+      requestFullscreen: () => undefined,
+      exitFullscreen: () => undefined,
+      isFullscreen: () => false,
+    });
+  }, [props.onTransportReady]);
+
   const sideloaded = textSubtitles(props.subtitleTracks).map((track) => ({
     title: track.label || track.language || "Subtitle",
     language: (track.language?.slice(0, 2).toLowerCase() || "en") as "en",
     type: track.url.endsWith(".vtt") ? TextTrackType.VTT : TextTrackType.SUBRIP,
-    uri: absoluteUrl(track.url, origin),
+    uri: playbackMediaUrl(track.url, origin, props.headers["x-streamerr-session"]),
   }));
 
   const selectedTextTrack =
@@ -34,10 +52,20 @@ export function NativeVideoSurface(props: VideoSurfaceProps) {
       ? { type: SelectedTrackType.DISABLED }
       : { type: SelectedTrackType.INDEX, value: props.subtitleIndex };
 
+  // iOS AVPlayer does not reliably forward custom headers on HLS segments.
+  // Auth is in the query string (playbackMediaUrl / playlist rewrite). Keep
+  // headers for progressive DirectPlay/DirectStream (single URL).
+  const iosHls = Platform.OS === "ios" && kind === "hls";
+  const sourceHeaders = iosHls ? undefined : props.headers;
+
   return (
     <Video
       ref={ref}
-      source={{ uri: props.uri, headers: props.headers, type: videoType }}
+      source={{
+        uri: props.uri,
+        ...(sourceHeaders ? { headers: sourceHeaders } : {}),
+        ...(videoType ? { type: videoType } : {}),
+      }}
       style={StyleSheet.absoluteFill}
       paused={props.paused}
       resizeMode="contain"
@@ -45,16 +73,39 @@ export function NativeVideoSurface(props: VideoSurfaceProps) {
         const d = Number.isFinite(data.duration) && data.duration > 0 ? data.duration : 0;
         props.onLoad({ duration: d });
       }}
-      onProgress={(data: OnProgressData) => props.onProgress({ currentTime: data.currentTime })}
-      onEnd={props.onEnd}
-      onError={(e) => props.onError(e.error?.errorString ?? "Playback failed")}
+      onProgress={(data: OnProgressData) =>
+        props.onProgress({
+          currentTime: data.currentTime,
+          duration:
+            Number.isFinite(data.seekableDuration) && data.seekableDuration > 0
+              ? data.seekableDuration
+              : undefined,
+        })
+      }
+      onEnd={() => props.onEnd()}
+      onError={(e) => {
+        const err = e.error;
+        const detail =
+          err?.errorString ||
+          err?.localizedDescription ||
+          (err?.code != null ? `code ${err.code}` : null) ||
+          "Playback failed";
+        let host = "";
+        try {
+          host = new URL(props.uri).host;
+        } catch {
+          host = props.uri.slice(0, 48);
+        }
+        console.error("[NativeVideoSurface]", kind, host, detail, err);
+        props.onError(`${detail} (${kind} @ ${host})`);
+      }}
       textTracks={sideloaded}
       selectedTextTrack={selectedTextTrack}
       reportBandwidth
       ignoreSilentSwitch="ignore"
       playInBackground={false}
       controls={false}
-      // ExoPlayer paints its own always-on LIVE chip; we render ours in chrome.
+      automaticallyWaitsToMinimizeStalling
       controlsStyles={{ hideLiveBadge: true }}
     />
   );

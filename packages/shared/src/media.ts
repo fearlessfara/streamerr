@@ -37,6 +37,13 @@ export const MediaMetadataSchema = z.object({
   creators: z.array(CreditPersonSchema).optional(),
   /** Writers / screenplay credits. */
   writers: z.array(CreditPersonSchema).optional(),
+  /**
+   * YouTube trailer watch URL when Seerr/TMDb exposes a Trailer video
+   * (e.g. https://www.youtube.com/watch?v=…).
+   */
+  trailerUrl: z.string().url().optional(),
+  /** YouTube video id for embedding muted billboard previews. */
+  trailerYoutubeKey: z.string().optional(),
 });
 export type MediaMetadata = z.infer<typeof MediaMetadataSchema>;
 

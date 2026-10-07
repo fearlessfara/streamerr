@@ -63,11 +63,45 @@ export function attachWebPlayback(
       onError(info?.msg ?? "Live stream error");
     });
   } else if (kind === "hls" && Hls.isSupported()) {
-    hls = new Hls({ enableWorker: true, startPosition: startPosition && startPosition > 30 ? startPosition : -1 });
+    const resumeAt = startPosition && startPosition > 30 ? startPosition : -1;
+    hls = new Hls({
+      enableWorker: true,
+      startPosition: resumeAt,
+      // Jellyfin remux/transcode segments can be slow on first hit after seek/reload.
+      fragLoadingTimeOut: 30_000,
+      fragLoadingMaxRetry: 4,
+      fragLoadingRetryDelay: 1_000,
+      manifestLoadingTimeOut: 20_000,
+      levelLoadingTimeOut: 20_000,
+    });
     hls.loadSource(url);
     hls.attachMedia(video);
+    // Reinforce resume after the manifest is ready — startPosition alone can
+    // lose a race on some remux/transcode playlists.
+    if (resumeAt > 30) {
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (destroyed) return;
+        try {
+          if (Math.abs(video.currentTime - resumeAt) > 2) {
+            video.currentTime = resumeAt;
+          }
+        } catch {
+          /* ignore */
+        }
+      });
+    }
     hls.on(Hls.Events.ERROR, (_e, data) => {
-      if (data.fatal) onError(data.details || "HLS error");
+      if (!data.fatal) return;
+      // Auto-recover transient network / media errors before surfacing UI.
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        hls?.startLoad();
+        return;
+      }
+      if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        hls?.recoverMediaError();
+        return;
+      }
+      onError(data.details || "HLS error");
     });
   } else {
     video.src = url;
@@ -81,8 +115,18 @@ export function attachWebPlayback(
       video.pause();
     },
     seek: (seconds: number) => {
+      const target = Math.max(0, seconds);
       try {
-        video.currentTime = seconds;
+        // Prefer seeking inside the current seekable window when present.
+        if (video.seekable.length > 0) {
+          const start = video.seekable.start(0);
+          const end = video.seekable.end(video.seekable.length - 1);
+          if (target >= start && target <= end) {
+            video.currentTime = target;
+            return;
+          }
+        }
+        video.currentTime = target;
       } catch {
         /* ignore */
       }

@@ -4,7 +4,7 @@ import { useNavigation, useRoute } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useQuery } from "@tanstack/react-query";
 import { logout, searchMedia } from "@streamerr/client";
-import { openMedia, webGradient } from "@streamerr/native-ui";
+import { Artwork, openMedia, webGradient } from "@streamerr/native-ui";
 import type { RootStackParamList } from "../nav";
 import { useWebLayout } from "../layout";
 import { clearSession } from "../session";
@@ -161,15 +161,6 @@ export function WebChrome({
                 >
                   <Text style={styles.menuText}>Requests</Text>
                 </Pressable>
-                <Pressable
-                  style={styles.menuItem}
-                  onPress={() => {
-                    setMenuOpen(false);
-                    navigation.navigate("Server", { change: true });
-                  }}
-                >
-                  <Text style={styles.menuText}>Change server</Text>
-                </Pressable>
                 <Pressable style={styles.menuItem} onPress={() => void signOut()}>
                   <Text style={styles.menuText}>Sign out</Text>
                 </Pressable>
@@ -202,6 +193,11 @@ export function WebChrome({
                       );
                     }}
                   >
+                    <Artwork
+                      url={item.metadata.posterUrl || item.metadata.backdropUrl}
+                      maxWidth={80}
+                      style={styles.resultPoster}
+                    />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.resultTitle} numberOfLines={1}>
                         {item.metadata.title}
@@ -327,7 +323,14 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   panelStatus: { color: "#b3b3b3", padding: 14, fontSize: 14 },
-  result: { paddingHorizontal: 14, paddingVertical: 10 },
+  result: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  resultPoster: { width: 40, height: 60, borderRadius: 2, backgroundColor: "#222" },
   resultTitle: { color: "#fff", fontWeight: "600", fontSize: 14 },
   resultSub: { color: "#b3b3b3", fontSize: 12, marginTop: 2, textTransform: "capitalize" },
   more: {

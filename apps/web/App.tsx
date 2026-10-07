@@ -1,4 +1,4 @@
-import { type JSX, useEffect } from "react";
+import { type JSX, useEffect, useState } from "react";
 import { NavigationContainer, useNavigation } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
@@ -7,6 +7,7 @@ import { BootSkeleton, colors } from "@streamerr/native-ui";
 import { StatusBar } from "expo-status-bar";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "./src/nav";
+import { webLinking } from "./src/linking";
 import { attachClient, ensureClient } from "./src/session";
 import {
   DetailsScreen,
@@ -20,7 +21,6 @@ import {
   RequestsScreen,
   SearchScreen,
   SeriesScreen,
-  ServerScreen,
 } from "./src/screens";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -39,12 +39,8 @@ function BootScreen() {
   useEffect(() => {
     void (async () => {
       const url = await ensureClient();
-      // Empty string = same-origin / Metro-proxied API (valid). Only null means unset.
-      if (url === null) {
-        navigation.reset({ index: 0, routes: [{ name: "Server" }] });
-        return;
-      }
-      attachClient(url);
+      // Web always talks to the host serving this app (same-origin / Metro proxy).
+      attachClient(url ?? "");
       try {
         await me();
         navigation.reset({ index: 0, routes: [{ name: "Home" }] });
@@ -80,32 +76,42 @@ const Requests = withUser(RequestsScreen);
 const Profile = withUser(ProfileScreen);
 const Details = withUser((_p) => <DetailsScreen />);
 
+/**
+ * Attach the API client before any screen mounts. Deep links used to skip Boot,
+ * so reload on /home (etc.) hit me() with an unconfigured client.
+ */
+function useClientReady(): boolean {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void ensureClient()
+      .catch(() => null)
+      .finally(() => {
+        if (!cancelled) setReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return ready;
+}
+
 export function App() {
+  const clientReady = useClientReady();
+
+  if (!clientReady) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <StatusBar style="light" />
+        <Loading />
+      </QueryClientProvider>
+    );
+  }
+
   return (
     <QueryClientProvider client={queryClient}>
       <StatusBar style="light" />
-      <NavigationContainer
-        linking={{
-          prefixes: ["/"],
-          config: {
-            screens: {
-              Boot: "",
-              Home: "home",
-              Movies: "movies",
-              Series: "series",
-              Search: "search",
-              Live: "live",
-              Downloads: "downloads",
-              Requests: "requests",
-              Profile: "profile",
-              Details: "media/:type/:tmdbId",
-              Player: "play",
-              Login: "login",
-              Server: "server",
-            },
-          },
-        }}
-      >
+      <NavigationContainer linking={webLinking}>
         <Stack.Navigator
           initialRouteName="Boot"
           screenOptions={{
@@ -115,7 +121,6 @@ export function App() {
           }}
         >
           <Stack.Screen name="Boot" component={BootScreen} />
-          <Stack.Screen name="Server" component={ServerScreen} />
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="Home" component={Home} />
           <Stack.Screen name="Movies" component={Movies} />

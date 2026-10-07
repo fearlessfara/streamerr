@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { DispatcharrProvider } from "@streamerr/providers";
 import type { AppContext } from "../context.js";
 import { requireAuth } from "../plugins/auth.js";
 
@@ -22,6 +23,7 @@ export async function registerLiveRoutes(app: FastifyInstance, ctx: AppContext):
           .union([z.literal("1"), z.literal("true"), z.literal("0"), z.literal("false")])
           .optional()
           .transform((v) => v === "1" || v === "true"),
+        sort: z.enum(["number", "name", "name_desc"]).default("number"),
       })
       .parse(req.query);
 
@@ -33,6 +35,7 @@ export async function registerLiveRoutes(app: FastifyInstance, ctx: AppContext):
       pageSize: query.pageSize,
       favouritesOnly: query.favouritesOnly,
       favouriteUuids: favourites,
+      sort: query.sort,
     });
     return { ...result, favourites };
   });
@@ -76,13 +79,65 @@ export async function registerLiveRoutes(app: FastifyInstance, ctx: AppContext):
   app.post("/api/live/play/:uuid", async (req) => {
     await requireAuth(req);
     const { uuid } = z.object({ uuid: z.string().uuid() }).parse(req.params);
+    const body = z
+      .object({
+        /** Remux MPEG-TS → HLS for AVPlayer (iOS). */
+        hls: z.boolean().optional(),
+      })
+      .default({})
+      .parse(req.body ?? {});
+
+    const channel = (await ctx.dispatcharr.getChannel?.(uuid)) ?? null;
+    const ua = String(req.headers["user-agent"] ?? "");
+    // Body flag from the app, or auto-detect Apple clients that cannot play MPEG-TS.
+    const wantHls =
+      body.hls === true ||
+      /iPhone|iPad|iPod|CFNetwork|Darwin|AppleCoreMedia|AVPlayer/i.test(ua);
+
+    if (wantHls) {
+      if (ctx.useMocks || !(ctx.dispatcharr instanceof DispatcharrProvider)) {
+        const source = await ctx.dispatcharr.resolveLivePlayback(uuid);
+        if (!source) {
+          const err = new Error("Channel not playable") as Error & { statusCode: number };
+          err.statusCode = 404;
+          throw err;
+        }
+        return { source, title: channel?.name, channel };
+      }
+      const provider = ctx.dispatcharr;
+      try {
+        await ctx.liveHls.ensureReady(uuid, (opts) => provider.openLiveStream(opts));
+      } catch (err) {
+        const e = err as Error & { statusCode?: number };
+        if (e.statusCode) {
+          const httpErr = new Error(e.message) as Error & { statusCode: number };
+          httpErr.statusCode = e.statusCode;
+          throw httpErr;
+        }
+        throw err;
+      }
+      return {
+        source: {
+          provider: "dispatcharr" as const,
+          delivery: {
+            mode: "proxy" as const,
+            url: `/api/playback/dispatcharr/live/${encodeURIComponent(uuid)}/hls/index.m3u8`,
+          },
+          directPlay: true,
+          mimeType: "application/vnd.apple.mpegurl",
+          hls: true,
+        },
+        title: channel?.name,
+        channel,
+      };
+    }
+
     const source = await ctx.dispatcharr.resolveLivePlayback(uuid);
     if (!source) {
       const err = new Error("Channel not playable") as Error & { statusCode: number };
       err.statusCode = 404;
       throw err;
     }
-    const channel = (await ctx.dispatcharr.getChannel?.(uuid)) ?? null;
     return { source, title: channel?.name, channel };
   });
 }

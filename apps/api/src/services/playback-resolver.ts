@@ -45,6 +45,7 @@ export class PlaybackResolver {
       startPositionSeconds?: number;
       audioStreamIndex?: number;
       maxStreamingBitrate?: number;
+      deviceProfile?: "web" | "ios" | "android";
     },
   ): Promise<PlaybackResolveResult | null> {
     const result = await this.pickSource(userContext, identity, opts);
@@ -89,6 +90,7 @@ export class PlaybackResolver {
       startPositionSeconds?: number;
       audioStreamIndex?: number;
       maxStreamingBitrate?: number;
+      deviceProfile?: "web" | "ios" | "android";
     },
   ): Promise<PlaybackResolveResult | null> {
     // 1) Jellyfin library
@@ -115,6 +117,7 @@ export class PlaybackResolver {
             startPositionSeconds: opts?.startPositionSeconds,
             audioStreamIndex: opts?.audioStreamIndex,
             maxStreamingBitrate: opts?.maxStreamingBitrate,
+            deviceProfile: opts?.deviceProfile,
           });
           if (source) return { status: "ready", source };
         }

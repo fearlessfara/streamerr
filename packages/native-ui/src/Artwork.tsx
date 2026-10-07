@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Image, type ImageResizeMode, type ImageStyle, type StyleProp } from "react-native";
-import { SESSION_COOKIE, SESSION_HEADER, getClient } from "@streamerr/client";
+import { SESSION_COOKIE, SESSION_HEADER, tryGetClient } from "@streamerr/client";
 
 /**
  * Proxied `/api/images/*` URLs need the session. RN Image often drops custom headers
@@ -10,9 +10,10 @@ export function artworkUri(
   url: string | undefined | null,
   maxWidth?: number,
   sessionId?: string | null,
+  baseUrl?: string | null,
 ): string | undefined {
   if (!url) return undefined;
-  const base = getClient().baseUrl;
+  const base = baseUrl ?? tryGetClient()?.baseUrl;
   if (!base) return url;
   try {
     const parsed = new URL(url, base);
@@ -37,7 +38,12 @@ function useSessionAuth(): { headers: Record<string, string>; sessionId: string 
   );
   useEffect(() => {
     let cancelled = false;
-    void getClient()
+    const client = tryGetClient();
+    if (!client) {
+      setAuth({ sessionId: null, headers: {} });
+      return;
+    }
+    void client
       .sessionHeaders()
       .then((next) => {
         if (cancelled) return;
@@ -46,6 +52,9 @@ function useSessionAuth(): { headers: Record<string, string>; sessionId: string 
           sessionId: session,
           headers: session ? { [SESSION_HEADER]: session } : {},
         });
+      })
+      .catch(() => {
+        if (!cancelled) setAuth({ sessionId: null, headers: {} });
       });
     return () => {
       cancelled = true;

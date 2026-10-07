@@ -1,13 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import type { Media } from "@streamerr/shared";
 import { resolvePreferredAction } from "@streamerr/shared";
-import type { UserContext } from "@streamerr/providers";
+import type { DiscoveryProvider, UserContext } from "@streamerr/providers";
 import type { AppContext } from "../context.js";
 import { requireAuth } from "../plugins/auth.js";
 import { jellyfinTmdbIndex } from "../db/schema.js";
 import { IptvProgressStore } from "../services/iptv-progress.js";
 import { buildHomeDiscoveryRails } from "../services/catalog-rails.js";
-import { applyTmdbArtwork } from "../services/media-enrichment.js";
+import { applyTmdbArtwork, resolveMediaByTmdb } from "../services/media-enrichment.js";
 
 /** Prefer a real next episode from Dispatcharr/Jellyfin catalogues (handles season wrap). */
 async function refineIptvNextUp(
@@ -146,11 +146,37 @@ export async function registerHomeRoutes(app: FastifyInstance, ctx: AppContext):
       }
       return `${id.mediaType}:${id.tmdbId ?? ""}`;
     };
+    /** One card per series on home; multi-episode progress stays on series detail. */
+    const seriesContinueKey = (m: Media): string => {
+      const id = m.identity;
+      if (id.mediaType === "episode") {
+        if (id.jellyfinSeriesId) return `series:jf:${id.jellyfinSeriesId}`;
+        if (id.tmdbId != null) return `series:tmdb:${id.tmdbId}`;
+        return `ep:${id.jellyfinItemId ?? ""}:${id.seasonNumber ?? ""}:${id.episodeNumber ?? ""}`;
+      }
+      if (id.mediaType === "tv") {
+        if (id.tmdbId != null) return `series:tmdb:${id.tmdbId}`;
+        if (id.jellyfinItemId) return `series:jf:${id.jellyfinItemId}`;
+      }
+      return `${id.mediaType}:${id.tmdbId ?? id.jellyfinItemId ?? ""}`;
+    };
+    const dedupeContinueBySeries = (items: Media[]): Media[] => {
+      const seen = new Set<string>();
+      const out: Media[] = [];
+      for (const item of items) {
+        const key = seriesContinueKey(item);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(item);
+      }
+      return out;
+    };
     const jfKeys = new Set(continueWatching.map(continueKey));
-    const mergedContinue = [
+    // Lists are newest-first — keep the most recently watched episode per series.
+    const mergedContinue = dedupeContinueBySeries([
       ...continueWatching,
       ...iptvContinue.filter((m) => !jfKeys.has(continueKey(m))),
-    ];
+    ]);
 
     const nextKeys = new Set(
       nextUp.map(
@@ -179,8 +205,74 @@ export async function registerHomeRoutes(app: FastifyInstance, ctx: AppContext):
       })),
     );
 
+    // My List rail (persisted per user).
+    const myListKeys = ctx.myList.list(session.jellyfinUserId);
+    const myListItems: Media[] = [];
+    for (const key of myListKeys.slice(0, 24)) {
+      const m = /^(movie|tv):(\d+)$/.exec(key);
+      if (!m) continue;
+      const resolved = await resolveMediaByTmdb(
+        ctx,
+        userContext,
+        m[1] as "movie" | "tv",
+        Number(m[2]),
+      ).catch(() => null);
+      if (resolved?.media) myListItems.push(resolved.media);
+    }
+    const myListRail =
+      myListItems.length > 0
+        ? [{ id: "mylist", title: "My List", items: myListItems }]
+        : [];
+
+    // Top 10 from trending (first page, ranked in the UI).
+    const trendingRail = discoveryRails.find((r) => r.id === "trending");
+    const top10Items = (trendingRail?.items ?? []).slice(0, 10);
+    const top10Rail =
+      top10Items.length >= 3
+        ? [{ id: "top10", title: "Top 10 Today", items: top10Items }]
+        : [];
+
+    // Because you watched X — similar to the first Continue Watching title.
+    let becauseRail: Array<{ id: string; title: string; items: Media[] }> = [];
+    const seed = mergedContinue[0];
+    const seedType =
+      seed?.identity.mediaType === "episode"
+        ? "tv"
+        : seed?.identity.mediaType === "movie" || seed?.identity.mediaType === "tv"
+          ? seed.identity.mediaType
+          : null;
+    const seedTmdb = seed?.identity.tmdbId;
+    const discovery = ctx.seerr as DiscoveryProvider;
+    if (seedType && seedTmdb && discovery.getSimilar) {
+      const similar = await discovery.getSimilar(seedType, seedTmdb).catch(() => [] as Media[]);
+      const { enrichDiscoveryRow } = await import("../services/media-enrichment.js");
+      const enriched = enrichDiscoveryRow(ctx, similar).slice(0, 18);
+      if (enriched.length > 0) {
+        const label = seed.metadata.title?.replace(/\s*S\d+E\d+\s*$/i, "").trim() || "this title";
+        becauseRail = [
+          {
+            id: `because-${seedType}-${seedTmdb}`,
+            title: `Because you watched ${label}`,
+            items: enriched,
+          },
+        ];
+      }
+    }
+
+    // Keep trending in discovery but prefer Top 10 near the top; drop duplicate trending id if Top 10 present.
+    const discoveryRest = top10Rail.length
+      ? discoveryRails.filter((r) => r.id !== "trending")
+      : discoveryRails;
+
     return {
-      rows: [...personalWithArt, ...discoveryRails],
+      rows: [
+        ...personalWithArt.slice(0, 1),
+        ...myListRail,
+        ...top10Rail,
+        ...becauseRail,
+        ...personalWithArt.slice(1),
+        ...discoveryRest,
+      ],
     };
   });
 }

@@ -93,12 +93,16 @@ export function PillButton({
   tone = "light",
   onPress,
   disabled,
+  showFocusRing = false,
+  hasTVPreferredFocus,
 }: {
   label: string;
   icon?: "play" | "info";
   tone?: "light" | "glass";
   onPress: () => void;
   disabled?: boolean;
+  showFocusRing?: boolean;
+  hasTVPreferredFocus?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const light = tone === "light";
@@ -107,21 +111,34 @@ export function PillButton({
     <Pressable
       disabled={disabled}
       onPress={onPress}
+      hasTVPreferredFocus={hasTVPreferredFocus}
       onHoverIn={() => setHovered(true)}
       onHoverOut={() => setHovered(false)}
-      style={[
-        pillStyles.base,
-        light ? pillStyles.light : pillStyles.glass,
-        (hovered || disabled) && { opacity: disabled ? 0.6 : 0.88 },
-      ]}
+      style={(state) => {
+        const focused = showFocusRing && isTvFocused(state);
+        return [
+          pillStyles.base,
+          light ? pillStyles.light : pillStyles.glass,
+          (hovered || disabled) && { opacity: disabled ? 0.6 : 0.88 },
+          focused && pillStyles.focused,
+        ];
+      }}
     >
-      {icon === "play" ? <PlayIcon color={color} size={22} /> : null}
-      {icon === "info" ? (
-        <View style={[pillStyles.info, { borderColor: color }]}>
-          <Text style={[pillStyles.infoText, { color }]}>i</Text>
-        </View>
-      ) : null}
-      <Text style={[pillStyles.label, { color }]}>{label}</Text>
+      {(state) => {
+        const focused = showFocusRing && isTvFocused(state);
+        const fg = focused && !light ? "#000" : color;
+        return (
+          <>
+            {icon === "play" ? <PlayIcon color={fg} size={22} /> : null}
+            {icon === "info" ? (
+              <View style={[pillStyles.info, { borderColor: fg }]}>
+                <Text style={[pillStyles.infoText, { color: fg }]}>i</Text>
+              </View>
+            ) : null}
+            <Text style={[pillStyles.label, { color: fg }]}>{label}</Text>
+          </>
+        );
+      }}
     </Pressable>
   );
 }
@@ -135,9 +152,16 @@ const pillStyles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 18,
     minHeight: 40,
+    borderWidth: 3,
+    borderColor: "transparent",
   },
   light: { backgroundColor: "#fff" },
   glass: { backgroundColor: "rgba(128, 128, 128, 0.4)" },
+  focused: {
+    backgroundColor: "#fff",
+    borderColor: "#fff",
+    transform: [{ scale: 1.06 }],
+  },
   label: { fontSize: 16, fontWeight: "500" },
   info: {
     width: 18,

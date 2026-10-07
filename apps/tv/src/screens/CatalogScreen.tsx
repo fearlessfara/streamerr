@@ -7,6 +7,7 @@ import { useScreenNav } from "../useScreenNav";
 export function CatalogScreen({
   username,
   mediaType,
+  title,
 }: {
   username: string;
   mediaType: "movie" | "tv";
@@ -21,20 +22,23 @@ export function CatalogScreen({
         nav={nav}
         mediaType={mediaType}
         focusMode="tv"
+        appearance="web"
+        pageTitle={title}
         searchInput={({ value, onChangeText }) => (
           <TvTextInput
             style={{
-              backgroundColor: "#2f2f2f",
               color: "#fff",
+              backgroundColor: "rgba(255,255,255,0.12)",
+              borderRadius: 999,
+              paddingHorizontal: 16,
+              paddingVertical: 8,
+              minWidth: 140,
               fontSize: 16,
-              padding: 12,
-              borderRadius: 4,
-              marginBottom: 18,
             }}
             value={value}
             onChangeText={onChangeText}
-            placeholder="Filter library…"
-            placeholderTextColor="#b3b3b3"
+            placeholder="Genres"
+            placeholderTextColor="rgba(255,255,255,0.85)"
             autoCapitalize="none"
             autoCorrect={false}
           />

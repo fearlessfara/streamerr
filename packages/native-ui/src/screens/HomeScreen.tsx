@@ -86,6 +86,7 @@ export function HomeScreen({
             media={featured}
             layout={layout}
             variant="bleed"
+            focusMode={focusMode}
             playLabel={
               playMedia.isPending ? bufferStatus || "Resolving…" : actionLabel(featured).replace(/^▶\s*/, "")
             }
@@ -139,6 +140,7 @@ export function HomeScreen({
             appearance={appearance}
             showFocusRing={tv}
             railIndex={rowIndex}
+            ranked={row.id === "top10"}
             onOpen={open}
             onPlay={(media) => playMedia.mutate(media)}
             onFocusCard={tv ? () => ensureRailVisible(row.id) : undefined}
@@ -152,7 +154,15 @@ export function HomeScreen({
             }
           />
         ))}
-        {!homeQuery.isLoading && !(homeQuery.data?.rows ?? []).length ? (
+        {homeQuery.isError ? (
+          <View style={{ paddingHorizontal: layout.pageX, gap: 12 }}>
+            <Text style={styles.empty}>
+              Couldn’t load Home. {(homeQuery.error as Error)?.message || "Check your connection to the Streamerr API."}
+            </Text>
+            <Button label="Try again" onPress={() => void homeQuery.refetch()} />
+          </View>
+        ) : null}
+        {!homeQuery.isLoading && !homeQuery.isError && !(homeQuery.data?.rows ?? []).length ? (
           <Text style={[styles.empty, { paddingHorizontal: layout.pageX }]}>Nothing on Home yet.</Text>
         ) : null}
       </ScrollView>

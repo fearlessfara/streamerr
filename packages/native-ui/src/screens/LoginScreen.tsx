@@ -1,11 +1,18 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Platform, StyleSheet, Text, TextInput, View } from "react-native";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { getOrCreateDeviceId, login, type KeyValueStorage } from "@streamerr/client";
+import {
+  getClient,
+  getOrCreateDeviceId,
+  login,
+  me,
+  type KeyValueStorage,
+} from "@streamerr/client";
 import { Button } from "../Button.js";
 import { fieldStyles } from "../fieldStyles.js";
 import { colors } from "../theme.js";
 import { webGradient } from "../webStyle.js";
+import { SERVER_URL_KEY } from "../session.js";
 import type { Appearance, ScreenNav } from "./types.js";
 
 export function LoginScreen({
@@ -16,6 +23,7 @@ export function LoginScreen({
   paddingBottom = 24,
   wrapper,
   appearance = "native",
+  ensureApi,
 }: {
   nav: Pick<ScreenNav, "openServer" | "resetToMain">;
   storage: KeyValueStorage;
@@ -24,21 +32,60 @@ export function LoginScreen({
   paddingBottom?: number;
   wrapper?: (children: ReactNode) => ReactNode;
   appearance?: Appearance;
+  /** Re-attach API client before sign-in (mobile Metro reload). */
+  ensureApi?: () => Promise<string | null>;
 }) {
   const qc = useQueryClient();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [serverUrl, setServerUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const fromEnsure = ensureApi ? await ensureApi().catch(() => null) : null;
+      if (fromEnsure) {
+        setServerUrl(fromEnsure);
+        return;
+      }
+      setServerUrl(await storage.getItem(SERVER_URL_KEY));
+    })();
+  }, [ensureApi, storage]);
 
   const mutation = useMutation({
-    mutationFn: async () =>
-      login({
-        username,
-        password,
-        deviceId: await getOrCreateDeviceId(storage),
-        deviceName,
-      }),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["me"] });
+    mutationFn: async () => {
+      const url = ensureApi ? await ensureApi() : serverUrl;
+      // Web uses same-origin (empty base). Native needs an explicit API URL.
+      if (appearance !== "web" && (url == null || !String(url).trim())) {
+        throw new Error("No server configured. Tap Change server and enter http://<mac-ip>:8787");
+      }
+      if (url != null) setServerUrl(url);
+      try {
+        getClient();
+      } catch (err) {
+        throw new Error((err as Error).message);
+      }
+      if (!username.trim() || !password) {
+        throw new Error("Enter your Jellyfin username and password");
+      }
+      const where = appearance === "web" ? "this site" : url || "server";
+      try {
+        await login({
+          username: username.trim(),
+          password,
+          deviceId: await getOrCreateDeviceId(storage),
+          deviceName,
+        });
+      } catch (err) {
+        throw new Error(`Sign-in failed (${where}): ${(err as Error).message}`);
+      }
+      try {
+        return await me();
+      } catch (err) {
+        throw new Error(`Signed in but session check failed (${where}): ${(err as Error).message}`);
+      }
+    },
+    onSuccess: async (session) => {
+      qc.setQueryData(["me"], session);
       nav.resetToMain?.();
     },
   });
@@ -85,13 +132,6 @@ export function LoginScreen({
             onPress={() => mutation.mutate()}
             disabled={mutation.isPending}
           />
-          <View style={{ height: 12 }} />
-          <Button
-            label="Change server"
-            variant="ghost"
-            style={styles.action}
-            onPress={() => nav.openServer?.({ change: true })}
-          />
         </View>
       </View>
     );
@@ -103,6 +143,7 @@ export function LoginScreen({
       <Text style={styles.wordmark}>STREAMERR</Text>
       <Text style={styles.title}>Sign In</Text>
       <Text style={styles.copy}>Your media. One stream. Use your Jellyfin account.</Text>
+      {serverUrl ? <Text style={styles.serverHint}>API: {serverUrl}</Text> : null}
       {mutation.isError ? <Text style={styles.error}>{(mutation.error as Error).message}</Text> : null}
       <TextInput
         style={fieldStyles.input}
@@ -152,7 +193,8 @@ const styles = StyleSheet.create({
   },
   wordmark: { color: colors.accent, fontSize: 26, fontWeight: "800", marginBottom: 20 },
   title: { color: colors.text, fontSize: 26, fontWeight: "700", marginBottom: 10 },
-  copy: { color: colors.muted, fontSize: 15, marginBottom: 20, lineHeight: 21 },
+  copy: { color: colors.muted, fontSize: 15, marginBottom: 12, lineHeight: 21 },
+  serverHint: { color: colors.muted, fontSize: 12, marginBottom: 16, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
   action: { alignSelf: "stretch" },
   error: { color: colors.danger, marginBottom: 12, fontSize: 14 },
   webPage: { flex: 1, backgroundColor: "#141414", justifyContent: "center", alignItems: "center" },

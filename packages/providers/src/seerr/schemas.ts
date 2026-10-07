@@ -136,6 +136,17 @@ const SeerrNamedSchema = z
   })
   .passthrough();
 
+const SeerrRelatedVideoSchema = z
+  .object({
+    url: z.string().optional(),
+    key: z.string().optional(),
+    name: z.string().optional(),
+    size: z.number().optional(),
+    type: z.string().optional(),
+    site: z.string().optional(),
+  })
+  .passthrough();
+
 export const SeerrMovieDetailsSchema = z
   .object({
     id: z.number(),
@@ -153,6 +164,7 @@ export const SeerrMovieDetailsSchema = z
     productionCompanies: z.array(SeerrNamedSchema).optional(),
     keywords: z.array(SeerrNamedSchema).optional(),
     credits: SeerrCreditsSchema.optional().nullable(),
+    relatedVideos: z.array(SeerrRelatedVideoSchema).optional().nullable(),
     mediaInfo: MediaInfoSchema.optional().nullable(),
   })
   .passthrough();
@@ -217,6 +229,7 @@ export const SeerrTvDetailsSchema = z
     productionCompanies: z.array(SeerrNamedSchema).optional(),
     keywords: z.array(SeerrNamedSchema).optional(),
     credits: SeerrCreditsSchema.optional().nullable(),
+    relatedVideos: z.array(SeerrRelatedVideoSchema).optional().nullable(),
     mediaInfo: MediaInfoSchema.optional().nullable(),
   })
   .passthrough();
