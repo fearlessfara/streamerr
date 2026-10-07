@@ -20,14 +20,16 @@ config.resolver.extraNodeModules = {
 const defaultResolveRequest = config.resolver.resolveRequest;
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (moduleName.startsWith(".") && moduleName.endsWith(".js")) {
-    try {
-      return context.resolveRequest(
-        context,
-        moduleName.replace(/\.js$/, ".ts"),
-        platform,
-      );
-    } catch {
-      // fall through to the original specifier
+    for (const ext of [".ts", ".tsx"]) {
+      try {
+        return context.resolveRequest(
+          context,
+          moduleName.replace(/\.js$/, ext),
+          platform,
+        );
+      } catch {
+        // try next extension
+      }
     }
   }
   if (defaultResolveRequest) {

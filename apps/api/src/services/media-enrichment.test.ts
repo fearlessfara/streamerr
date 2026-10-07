@@ -3,7 +3,13 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import type { Media } from "@streamerr/shared";
 import * as schema from "../db/schema.js";
-import { enrichDiscoveryRow, applyTmdbArtwork, clearTmdbArtworkCache } from "./media-enrichment.js";
+import {
+  enrichDiscoveryRow,
+  applyTmdbArtwork,
+  clearTmdbArtworkCache,
+  resolveMediaByTmdb,
+  resolveMediaAvailabilityByTmdb,
+} from "./media-enrichment.js";
 import { applyCatalogWinners } from "./vod-catalog-sync.js";
 
 function makeDb() {
@@ -53,6 +59,114 @@ function seerrSeries(tmdbId: number, title: string): Media {
     preferredAction: "REQUEST",
   };
 }
+
+describe("resolveMediaByTmdb", () => {
+  it("returns a fast shell with iptvResolvePending when the index misses", async () => {
+    const db = makeDb();
+    let searched = false;
+    const ctx = {
+      db,
+      seerr: {
+        getDetails: async () => seerrMovie(550, "Fight Club"),
+      },
+      jellyfin: {
+        findByTmdb: async () => null,
+      },
+      dispatcharr: {
+        getPreferredLanguages: () => ["en"],
+        findVodByTmdb: async () => {
+          searched = true;
+          return null;
+        },
+      },
+      acquisitions: { cacheAvailabilityFor: () => null },
+    } as unknown as Parameters<typeof resolveMediaByTmdb>[0];
+
+    const out = await resolveMediaByTmdb(ctx, {} as never, "movie", 550);
+    expect(out?.media.metadata.title).toBe("Fight Club");
+    expect(out?.iptvResolvePending).toBe(true);
+    expect(searched).toBe(false);
+  });
+
+  it("attaches indexed Dispatcharr without live search", async () => {
+    const db = makeDb();
+    applyCatalogWinners(
+      db,
+      [
+        {
+          tmdbId: 550,
+          mediaType: "movie",
+          dispatcharrId: 99,
+          uuid: "fight-club",
+          title: "EN - Fight Club",
+          catalogueLanguage: "en",
+        },
+      ],
+      new Date(),
+    );
+    let searched = false;
+    const ctx = {
+      db,
+      seerr: {
+        getDetails: async () => seerrMovie(550, "Fight Club"),
+      },
+      jellyfin: {
+        findByTmdb: async () => null,
+      },
+      dispatcharr: {
+        getPreferredLanguages: () => ["en"],
+        findVodByTmdb: async () => {
+          searched = true;
+          return null;
+        },
+      },
+      acquisitions: { cacheAvailabilityFor: () => null },
+    } as unknown as Parameters<typeof resolveMediaByTmdb>[0];
+
+    const out = await resolveMediaByTmdb(ctx, {} as never, "movie", 550);
+    expect(out?.iptvResolvePending).toBe(false);
+    expect(out?.media.preferredAction).toBe("PLAY_IPTV");
+    expect(searched).toBe(false);
+  });
+
+  it("availability path searches Dispatcharr and remembers hits", async () => {
+    const db = makeDb();
+    const ctx = {
+      db,
+      seerr: {
+        getDetails: async () => seerrMovie(550, "Fight Club"),
+      },
+      jellyfin: {
+        findByTmdb: async () => null,
+      },
+      dispatcharr: {
+        getPreferredLanguages: () => ["en"],
+        findVodByTmdb: async () => ({
+          identity: { tmdbId: 550, mediaType: "movie" as const },
+          metadata: { title: "EN - Fight Club" },
+          availability: [
+            {
+              provider: "dispatcharr" as const,
+              available: true,
+              canPlay: true,
+              movieId: 99,
+              uuid: "fight-club",
+              catalogueLanguage: "en",
+            },
+          ],
+          preferredAction: "PLAY_IPTV" as const,
+        }),
+      },
+      acquisitions: { cacheAvailabilityFor: () => null },
+    } as unknown as Parameters<typeof resolveMediaAvailabilityByTmdb>[0];
+
+    const out = await resolveMediaAvailabilityByTmdb(ctx, {} as never, "movie", 550);
+    expect(out?.preferredAction).toBe("PLAY_IPTV");
+    const indexed = db.select().from(schema.dispatcharrTmdbIndex).all();
+    expect(indexed).toHaveLength(1);
+    expect(indexed[0]?.uuid).toBe("fight-club");
+  });
+});
 
 describe("enrichDiscoveryRow", () => {
   it("marks an indexed movie as PLAY_IPTV", () => {

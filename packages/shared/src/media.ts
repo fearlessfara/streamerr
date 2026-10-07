@@ -1,11 +1,21 @@
 import { z } from "zod";
 import { MediaIdentitySchema } from "./identity.js";
 
+export const CreditPersonSchema = z.object({
+  tmdbId: z.number().int().optional(),
+  name: z.string(),
+  /** Character name for cast, or crew job (Director, Writer, …). */
+  role: z.string().optional(),
+  profileUrl: z.string().optional(),
+});
+export type CreditPerson = z.infer<typeof CreditPersonSchema>;
+
 export const MediaMetadataSchema = z.object({
   title: z.string(),
   originalTitle: z.string().optional(),
   year: z.number().int().optional(),
   overview: z.string().optional(),
+  tagline: z.string().optional(),
   posterUrl: z.string().optional(),
   backdropUrl: z.string().optional(),
   runtimeMinutes: z.number().optional(),
@@ -17,6 +27,16 @@ export const MediaMetadataSchema = z.object({
   genres: z.array(z.string()).optional(),
   /** TMDb series status, e.g. "Returning Series". */
   seriesStatus: z.string().optional(),
+  /** Studios / production companies (and TV networks). */
+  studios: z.array(z.string()).optional(),
+  /** Keywords / moods (Netflix “This show is”). */
+  keywords: z.array(z.string()).optional(),
+  /** Top-billed cast with optional portraits. */
+  cast: z.array(CreditPersonSchema).optional(),
+  /** Directors (movies) or creators (series). */
+  creators: z.array(CreditPersonSchema).optional(),
+  /** Writers / screenplay credits. */
+  writers: z.array(CreditPersonSchema).optional(),
 });
 export type MediaMetadata = z.infer<typeof MediaMetadataSchema>;
 

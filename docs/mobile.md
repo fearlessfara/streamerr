@@ -1,23 +1,21 @@
 # iOS / Android (phones & tablets)
 
-Phase 9 is a React Native app in [`apps/mobile`](../apps/mobile) that shares [`@streamerr/client`](../packages/client) with the website and Android TV app. Screens are touch-first (bottom tabs). Playback uses `react-native-video` (ExoPlayer on Android, AVPlayer on iOS).
+Phase 9 is a React Native app in [`apps/mobile`](../apps/mobile) that shares [`@streamerr/client`](../packages/client) and [`@streamerr/native-ui`](../packages/native-ui) with Android TV and the website. Screens are touch-first (bottom tabs). Playback uses `react-native-video` (ExoPlayer on Android, AVPlayer on iOS).
 
 ```text
-apps/web    (React DOM + @streamerr/ui)
+apps/web    (Expo + react-native-web + @streamerr/native-ui)
 apps/tv     (React Native + Expo TV / Leanback)
 apps/mobile (React Native + Expo / phones & tablets)
         │
         ├── @streamerr/client → Streamerr API
-        └── @streamerr/native-ui (shared RN primitives; see native-unification.md)
+        └── @streamerr/native-ui (shared screens + primitives)
 ```
 
-The website stays Vite + CSS for now (RN-web is a later phase — see [native-unification.md](./native-unification.md)). The TV app stays D-pad / landscape Leanback. Mobile does **not** import TV chrome components and does **not** set `EXPO_TV`.
+See [native-unification.md](./native-unification.md). The TV app stays D-pad / landscape Leanback. Mobile does **not** import TV chrome components and does **not** set `EXPO_TV`.
 
 ## Runtime
 
 The monorepo pins `react-native` to `react-native-tvos` (same as Android TV). That fork builds phone and tablet binaries. Mobile omits `@react-native-tvos/config-tv`, so prebuild produces a normal launcher (`app.streamerr.mobile`), not Leanback.
-
-If phone targets fail on the tvOS fork, scope the npm override to `@streamerr/tv` and give mobile stock React Native.
 
 ## Features
 
@@ -29,8 +27,6 @@ If phone targets fail on the tvOS fork, scope the npm override to `@streamerr/tv
 | Profile | Downloads, Requests, Change server, Sign out |
 | Playback | HLS, progressive; seek cap; sideloaded subtitles |
 | Live TV | Android: MPEG-TS via ExoPlayer. iOS: unavailable until API live HLS remux |
-
-Deep links, App Store / Play Store, PiP, and offline downloads are out of this pass.
 
 ## Develop
 
@@ -46,18 +42,8 @@ npx expo run:ios
 npx expo run:android
 ```
 
-Do **not** set `EXPO_TV`. Needs Xcode (iOS Simulator or device) and/or Android Studio with `ANDROID_HOME` set (Homebrew command-line tools: `/opt/homebrew/share/android-commandlinetools`). iOS deployment target is **16.4** (Expo 57).
-
-## Sideload (Android)
-
-```bash
-cd apps/mobile
-npx expo run:android --variant release
-adb install -r android/app/build/outputs/apk/release/app-release.apk
-```
+Do **not** set `EXPO_TV`. Needs Xcode (iOS Simulator or device) and/or Android Studio with `ANDROID_HOME` set.
 
 ## Live MPEG-TS on iOS
 
-[`GET /api/playback/dispatcharr/live/:uuid`](../apps/api/src/routes/playback.ts) returns raw `video/mp2t`. ExoPlayer plays that; AVPlayer does not. Until Streamerr exposes a live HLS remux (one IPTV lease), the Live tab on iOS shows an unavailable state and the player refuses MPEG-TS live.
-
-On first launch, enter the Streamerr origin (for example `http://192.168.1.10:8787`) and sign in with Jellyfin. Private LAN hosts may use `http`; public hosts are forced to `https`.
+Live channels stream as raw `video/mp2t`. ExoPlayer plays that; AVPlayer does not. Until Streamerr exposes a live HLS remux, the Live tab on iOS shows an unavailable state.

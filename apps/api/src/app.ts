@@ -26,10 +26,12 @@ function corsOrigins(publicUrl: string): true | string[] {
   try {
     const u = new URL(publicUrl);
     const origins = new Set<string>([u.origin]);
-    // Dev: Vite often sits on 5173 while the API is on STREAMERR_PUBLIC_URL.
+    // Dev: Vite/Expo web often sits on 5173 while the API is on STREAMERR_PUBLIC_URL.
     if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
       origins.add("http://localhost:5173");
       origins.add("http://127.0.0.1:5173");
+      origins.add("http://localhost:8081");
+      origins.add("http://127.0.0.1:8081");
       origins.add(`http://localhost:${u.port || "8787"}`);
       origins.add(`http://127.0.0.1:${u.port || "8787"}`);
     }

@@ -14,8 +14,8 @@ COPY packages ./packages
 COPY tsconfig.base.json ./
 RUN npm install
 RUN npm run build -w @streamerr/shared
+RUN npm run build -w @streamerr/client
 RUN npm run build -w @streamerr/providers
-RUN npm run build -w @streamerr/ui
 RUN npm run build -w @streamerr/api
 RUN npm run build -w @streamerr/web
 

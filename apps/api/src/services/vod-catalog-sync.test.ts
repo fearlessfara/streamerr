@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "../db/schema.js";
+import type { Media } from "@streamerr/shared";
 import {
   applyCatalogWinners,
+  collectHotVodTargets,
   pickCatalogWinners,
   type VodCatalogCandidate,
 } from "./vod-catalog-sync.js";
@@ -102,7 +104,48 @@ describe("pickCatalogWinners", () => {
 });
 
 describe("applyCatalogWinners", () => {
-  it("upserts winners and removes stale rows", () => {
+  it("upserts winners without pruning by default (hot warm)", () => {
+    const db = makeDb();
+    const t0 = new Date("2020-01-01T00:00:00Z");
+    applyCatalogWinners(
+      db,
+      [
+        {
+          tmdbId: 1,
+          mediaType: "movie",
+          dispatcharrId: 1,
+          uuid: "old",
+          title: "Old",
+          catalogueLanguage: "en",
+        },
+      ],
+      t0,
+    );
+
+    const t1 = new Date("2020-01-02T00:00:00Z");
+    const result = applyCatalogWinners(
+      db,
+      [
+        {
+          tmdbId: 2,
+          mediaType: "movie",
+          dispatcharrId: 22,
+          uuid: "keep-new",
+          title: "Keep Updated",
+          catalogueLanguage: "en",
+        },
+      ],
+      t1,
+    );
+
+    expect(result.upserted).toBe(1);
+    expect(result.removed).toBe(0);
+    const rows = db.select().from(schema.dispatcharrTmdbIndex).all();
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.tmdbId === 1)?.uuid).toBe("old");
+  });
+
+  it("removes stale rows when pruneStale is true", () => {
     const db = makeDb();
     const t0 = new Date("2020-01-01T00:00:00Z");
     applyCatalogWinners(
@@ -126,6 +169,7 @@ describe("applyCatalogWinners", () => {
         },
       ],
       t0,
+      { pruneStale: true },
     );
 
     const t1 = new Date("2020-01-02T00:00:00Z");
@@ -150,6 +194,7 @@ describe("applyCatalogWinners", () => {
         },
       ],
       t1,
+      { pruneStale: true },
     );
 
     expect(result.upserted).toBe(2);
@@ -160,5 +205,34 @@ describe("applyCatalogWinners", () => {
     expect(rows.find((r) => r.tmdbId === 1)).toBeUndefined();
     expect(rows.find((r) => r.tmdbId === 2)?.uuid).toBe("keep-new");
     expect(rows.find((r) => r.tmdbId === 3)?.mediaType).toBe("tv");
+  });
+});
+
+describe("collectHotVodTargets", () => {
+  it("dedupes Seerr home and catalog rails by mediaType:tmdbId", async () => {
+    const movie = (tmdbId: number, title: string): Media => ({
+      identity: { tmdbId, mediaType: "movie" },
+      metadata: { title, year: 2020 },
+      availability: [],
+      preferredAction: "REQUEST",
+    });
+    const seerr = {
+      discoverTrending: async () => [movie(1, "One"), movie(2, "Two")],
+      discoverMovies: async () => [movie(1, "One again"), movie(3, "Three")],
+      discoverTv: async () =>
+        [
+          {
+            identity: { tmdbId: 10, mediaType: "tv" as const },
+            metadata: { title: "Show", year: 2021 },
+            availability: [],
+            preferredAction: "REQUEST" as const,
+          },
+        ] satisfies Media[],
+    };
+
+    const targets = await collectHotVodTargets(seerr as never);
+    const keys = targets.map((t) => `${t.mediaType}:${t.tmdbId}`).sort();
+    expect(keys).toEqual(["movie:1", "movie:2", "movie:3", "tv:10"]);
+    expect(targets.find((t) => t.tmdbId === 1)?.titleHint).toBe("One");
   });
 });

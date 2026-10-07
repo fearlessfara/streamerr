@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   AccessibilityInfo,
   Animated,
+  Platform,
   StyleSheet,
   View,
   type StyleProp,
@@ -38,10 +39,12 @@ export function SkeletonBlock({ width = "100%", height = 16, style, radius = 4 }
       opacity.setValue(0.55);
       return;
     }
+    // RN Web has no native animated module — JS driver avoids the console warning.
+    const useNativeDriver = Platform.OS !== "web";
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(opacity, { toValue: 0.9, duration: 700, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 0.9, duration: 700, useNativeDriver }),
+        Animated.timing(opacity, { toValue: 0.4, duration: 700, useNativeDriver }),
       ]),
     );
     loop.start();

@@ -1,5 +1,1 @@
-export type TvPressState = { pressed: boolean; focused?: boolean };
-
-export function isTvFocused(state: { pressed: boolean }): boolean {
-  return Boolean((state as TvPressState).focused);
-}
+export { isTvFocused, type TvPressState } from "@streamerr/native-ui";

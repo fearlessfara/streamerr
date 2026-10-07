@@ -56,12 +56,12 @@ export async function registerRequestRoutes(app: FastifyInstance, ctx: AppContex
       is4k: body.is4k,
     });
 
-    const media = await resolveMediaByTmdb(
+    const resolved = await resolveMediaByTmdb(
       ctx,
       userContext,
       identity.mediaType,
       identity.tmdbId,
     );
-    return { ok: true as const, media };
+    return { ok: true as const, media: resolved?.media ?? null };
   });
 }

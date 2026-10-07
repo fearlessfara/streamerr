@@ -1,65 +1,40 @@
-# Native UI unification (and RN-web)
+# Native UI unification (React Native + RN Web)
 
-Streamerr already shares **domain + API** via `@streamerr/client` / `@streamerr/shared`. Visual trees were triplicated: Vite DOM web, Expo mobile, Expo TV.
-
-## Goal
-
-Maximize code share without a risky big-bang rewrite of the production website.
+Streamerr shares **domain + API** via `@streamerr/client` / `@streamerr/shared` and **UI** via `@streamerr/native-ui` across mobile, Android TV, and web (Expo + `react-native-web`).
 
 ```text
                     @streamerr/client  (API / playback helpers)
                               │
+                    @streamerr/native-ui  (screens + PosterCard + player chrome)
+                              │
         ┌─────────────────────┼─────────────────────┐
         │                     │                     │
-   apps/web              packages/native-ui      (future RN-web)
-   Vite + CSS            mobile + TV StyleSheet   optional Expo web
-   @streamerr/ui              │
-                        apps/mobile  apps/tv
+   apps/mobile            apps/tv               apps/web
+   tabs + touch           Leanback Chrome       Expo RN Web
+   react-native-video     react-native-video    @streamerr/player-web
+                                                (hls.js / mpegts.js)
 ```
 
-## Phases
+## Package roles
 
-### A — Shared native primitives (started)
+| Package | Role |
+|---------|------|
+| `@streamerr/native-ui` | Theme, skeletons, PosterCard, Artwork, shared screens, shared `PlayerScreen` chrome |
+| `@streamerr/player-web` | Browser MSE attach (`hls.js` / `mpegts.js`) + `WebVideoSurface` |
+| `apps/mobile` / `apps/tv` | Thin shells: chrome, layout metrics, `NativeVideoSurface` |
+| `apps/web` | Expo web shell; static export to `apps/web/dist` for API/`fastifyStatic` |
 
-- `@streamerr/native-ui`: theme tokens + Netflix-style skeleton layouts
-- Mobile/TV pass layout metrics (`NativeLayout`) so phone vs Leanback sizing stay local
-- Website stays Vite + `@streamerr/ui` CSS (no RN-web yet)
+## Player adapter
 
-### B — Dedupe mobile ↔ TV screens
+`VideoSurfaceProps` + shared `PlayerScreen` chrome live in `@streamerr/native-ui`.
+Platform surfaces implement seek/progress/load/error:
 
-- Extract shared hooks (home/catalog/details query keys + play mutations)
-- Share `PosterCard` / session helpers where identical
-- Keep separate chrome: bottom tabs (mobile) vs D-pad `Chrome` (TV)
+- Native: `react-native-video` (`NativeVideoSurface`)
+- Web: `attachWebPlayback` in `@streamerr/player-web`
 
-### C — Player adapter
+## Netflix-style loading UX
 
-- Interface: resolve → attach(url, kind) → seek / progress / subs
-- Implementations: web `hls.js`/`mpegts.js`, native `react-native-video`
-- Do **not** assume one player binary works on web
-
-### D — Optional RN-web shell
-
-- Add Expo `web` **beside** Vite once browse screens are shared
-- First candidates: Login, Home, Catalog, Search, Details
-- Defer: full player chrome, EPG guide, spatial focus parity with DOM
-
-## Why not “port web to RN” in one shot
-
-| Risk | Why |
-|------|-----|
-| `PlayerPage.tsx` (~2k LOC) | MSE + live MPEG-TS + IPTV cache HLS — not ExoPlayer |
-| `app.css` (~2.5k LOC) | Netflix hover/focus chrome is DOM-specific |
-| Focus models | Web spatial focus ≠ TV Pressable ≠ phone touch |
-| Live EPG | Web-only guide grid today |
-
-## Netflix-style loading UX (checklist)
-
-- Skeleton geometry matches real billboard / 16:9 rails / details hero
+- Skeleton geometry matches billboard / 16:9 rails / details hero
 - Prefer skeletons over spinners for content areas
 - Keep nav chrome mounted while rails load
-- Respect `prefers-reduced-motion` / `AccessibilityInfo`
-- Avoid layout jump when data arrives (same shell heights)
-
-## Status
-
-Phase A is in progress with `@streamerr/native-ui` skeletons. Web skeletons live in `apps/web/src/components/skeletons.tsx` and mirror the same Netflix geometry in CSS.
+- Respect `AccessibilityInfo` reduce-motion

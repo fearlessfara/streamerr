@@ -35,6 +35,7 @@ export interface AppContext {
   liveFavourites: LiveFavouritesStore;
   cacheManager: CacheManager;
   iptvConnections: IptvConnectionManager;
+  iptvProgress: IptvProgressStore;
   /** Last authenticated Jellyfin user context used for background library scans. */
   lastLibraryUserContext?: import("@streamerr/providers").UserContext;
   useMocks: boolean;
@@ -149,6 +150,7 @@ export function createAppContext(config: AppConfig): AppContext {
     liveFavourites,
     cacheManager,
     iptvConnections,
+    iptvProgress,
     useMocks,
   };
 
@@ -195,15 +197,17 @@ export function createAppContext(config: AppConfig): AppContext {
     };
   });
 
-  // Background Dispatcharr VOD catalogue index (metadata only — no IPTV streams).
+  // Background warm of hot Seerr titles into the Dispatcharr TMDb index (no full catalogue scan).
   startVodCatalogSync({
     db,
     dispatcharr: dispatcharr as DispatcharrProvider,
+    seerr,
     preferredLanguages: config.STREAMERR_PREFERRED_LANGUAGES,
     intervalMs: config.STREAMERR_VOD_SYNC_INTERVAL_MS,
     enabled:
       !useMocks &&
       Boolean(config.DISPATCHARR_URL?.trim()) &&
+      Boolean(config.SEERR_URL?.trim()) &&
       dispatcharr instanceof DispatcharrProvider,
   });
 

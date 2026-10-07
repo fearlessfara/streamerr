@@ -1,4 +1,5 @@
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import type { DetailsParams } from "@streamerr/native-ui";
 import type { MediaIdentity, PlaybackSource } from "@streamerr/shared";
 
 export type LiveChannelRef = {
@@ -21,7 +22,7 @@ export type RootStackParamList = {
   Server: { change?: boolean } | undefined;
   Login: undefined;
   Main: undefined;
-  Details: { jellyfinItemId?: string; type?: "movie" | "tv"; tmdbId?: number };
+  Details: DetailsParams;
   Player: PlayParams;
   Downloads: undefined;
   Requests: undefined;

@@ -20,21 +20,16 @@ Streamerr sits on top of **Jellyfin**, **Seerr**, and **Dispatcharr**. It does n
 
 ## Current status
 
-**Phases 1–7 (web) are implemented:**
+**Phases 1–9 are implemented** on a shared React Native UI (`@streamerr/native-ui`) with Expo web, Android TV, and iOS/Android shells:
 
 | Phase | Status |
 |-------|--------|
-| 1 Foundation | Done — monorepo, auth, providers, UI shell |
-| 2 Jellyfin | Done — login → home → details → play |
-| 3 Seerr | Done — discover, search, request |
-| 4 Dispatcharr VOD | Done — catalogue, resolve, play (auto-cache HLS) |
-| 5 Acquisition | Done — cache/library, promote, Jellyfin scan |
-| 6 Live TV | Done — channels, favourites, EPG guide, live play |
-| 7 Episodes / CW | Done — merged episodes, IPTV progress, Next Up |
-| 8 Android TV | React Native app in `apps/tv` — see [docs/android-tv.md](./docs/android-tv.md) |
-| 9 iOS / Android | React Native app in `apps/mobile` — see [docs/mobile.md](./docs/mobile.md) |
+| 1–7 Product (API + clients) | Done — auth, Jellyfin, Seerr, Dispatcharr, acquisition, live, episodes |
+| 8 Android TV | Done — `apps/tv` |
+| 9 iOS / Android | Done — `apps/mobile` |
+| Web (RN Web) | Done — `apps/web` Expo + `react-native-web` |
 
-See [docs/roadmap.md](./docs/roadmap.md).
+See [docs/roadmap.md](./docs/roadmap.md) and [docs/native-unification.md](./docs/native-unification.md).
 
 ## Requirements
 
@@ -118,7 +113,7 @@ npm run typecheck
 npm run lint
 ```
 
-Monorepo workspaces: `apps/web`, `apps/tv`, `apps/mobile`, `apps/api`, `packages/shared`, `packages/client`, `packages/providers`, `packages/ui`.
+Monorepo workspaces: `apps/web`, `apps/tv`, `apps/mobile`, `apps/api`, `packages/shared`, `packages/client`, `packages/providers`, `packages/native-ui`, `packages/player-web`.
 
 ## License
 

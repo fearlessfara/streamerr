@@ -5,58 +5,60 @@ import type { AppContext } from "../context.js";
 import { lookupDispatcharrIndex, rememberDispatcharrMedia } from "./dispatcharr-index.js";
 import { indexedTmdbKeys } from "./vod-catalog-sync.js";
 
-/**
- * Merge Jellyfin + Dispatcharr + Seerr for a TMDb title.
- */
-export async function resolveMediaByTmdb(
-  ctx: AppContext,
-  userContext: UserContext,
-  mediaType: "movie" | "tv",
+export interface ResolveMediaResult {
+  media: Media;
+  /** True when the client should call `/availability` for a live Dispatcharr search. */
+  iptvResolvePending: boolean;
+}
+
+function dispatcharrAvailFromIndex(
+  indexedHit: NonNullable<ReturnType<typeof lookupDispatcharrIndex>>,
   tmdbId: number,
-): Promise<Media | null> {
-  const getDetails = ctx.seerr.getDetails?.bind(ctx.seerr);
+  mediaType: "movie" | "tv",
+): Media["availability"][number] {
+  return {
+    provider: "dispatcharr" as const,
+    available: true,
+    ...(mediaType === "movie"
+      ? { movieId: indexedHit.dispatcharrId }
+      : { seriesId: indexedHit.dispatcharrId }),
+    uuid: indexedHit.uuid,
+    tmdbId: String(tmdbId),
+    catalogueLanguage: indexedHit.catalogueLanguage ?? undefined,
+    candidates: indexedHit.streamId ? [{ streamId: indexedHit.streamId }] : [],
+    canPlay: mediaType === "movie",
+  };
+}
 
-  // Seerr + Jellyfin in parallel (Seerr title/year then refine Dispatcharr).
-  const seerrPromise = getDetails
-    ? getDetails(mediaType, tmdbId).catch(() => null)
-    : Promise.resolve(null);
-  const jellyfinPromise = ctx.jellyfin
-    .findByTmdb(userContext, tmdbId, mediaType)
-    .catch(() => null);
-
-  const seerrMedia = await seerrPromise;
-  const titleHint = seerrMedia?.metadata.title;
-  const yearHint = seerrMedia?.metadata.year;
-
-  const preferredLanguages =
-    ctx.dispatcharr instanceof DispatcharrProvider
-      ? ctx.dispatcharr.getPreferredLanguages()
-      : undefined;
-  const indexed = lookupDispatcharrIndex(ctx.db, tmdbId, mediaType, preferredLanguages);
-
-  const [jellyfinMedia, dispatcharrMedia] = await Promise.all([
-    jellyfinPromise,
-    ctx.dispatcharr
-      .findVodByTmdb(tmdbId, mediaType, {
-        titleHint,
-        yearHint,
-        ...(indexed?.dispatcharrId != null ? { dispatcharrId: indexed.dispatcharrId } : {}),
-      })
-      .catch(() => null),
-  ]);
-
-  if (dispatcharrMedia) {
-    rememberDispatcharrMedia(ctx.db, dispatcharrMedia);
-  }
+function mergeResolvedMedia(opts: {
+  tmdbId: number;
+  mediaType: "movie" | "tv";
+  seerrMedia: Media | null;
+  jellyfinMedia: Media | null;
+  dispatcharrMedia: Media | null;
+  dispatcharrFromIndex: Media["availability"][number] | null;
+  cacheAvail: Media["availability"][number] | null | undefined;
+}): Media | null {
+  const {
+    tmdbId,
+    mediaType,
+    seerrMedia,
+    jellyfinMedia,
+    dispatcharrMedia,
+    dispatcharrFromIndex,
+    cacheAvail,
+  } = opts;
 
   if (!seerrMedia && !jellyfinMedia && !dispatcharrMedia) return null;
 
-  const cacheAvail = ctx.acquisitions.cacheAvailabilityFor({ tmdbId, mediaType });
+  const dispatcharrAvail =
+    dispatcharrMedia?.availability.filter((a) => a.provider === "dispatcharr") ??
+    (dispatcharrFromIndex ? [dispatcharrFromIndex] : []);
 
   const availability = [
     ...(jellyfinMedia?.availability ?? []),
     ...(cacheAvail ? [cacheAvail] : []),
-    ...(dispatcharrMedia?.availability.filter((a) => a.provider === "dispatcharr") ?? []),
+    ...dispatcharrAvail,
     ...(seerrMedia?.availability.filter((a) => a.provider === "seerr") ?? []),
   ];
 
@@ -84,12 +86,101 @@ export async function resolveMediaByTmdb(
         seerrMedia?.metadata.backdropUrl ??
         jellyfinMedia?.metadata.backdropUrl ??
         base.metadata.backdropUrl,
-      // Prefer Seerr year when Dispatcharr/list rows omit it.
       year: base.metadata.year ?? seerrMedia?.metadata.year ?? jellyfinMedia?.metadata.year,
     },
     availability,
     preferredAction: resolvePreferredAction(availability),
   };
+}
+
+/**
+ * Fast details shell: Seerr + Jellyfin + cache + Dispatcharr from SQLite index only.
+ * Does not await a live catalogue search.
+ */
+export async function resolveMediaByTmdb(
+  ctx: AppContext,
+  userContext: UserContext,
+  mediaType: "movie" | "tv",
+  tmdbId: number,
+): Promise<ResolveMediaResult | null> {
+  const getDetails = ctx.seerr.getDetails?.bind(ctx.seerr);
+
+  const [seerrMedia, jellyfinMedia] = await Promise.all([
+    getDetails ? getDetails(mediaType, tmdbId).catch(() => null) : Promise.resolve(null),
+    ctx.jellyfin.findByTmdb(userContext, tmdbId, mediaType).catch(() => null),
+  ]);
+
+  const preferredLanguages =
+    ctx.dispatcharr instanceof DispatcharrProvider
+      ? ctx.dispatcharr.getPreferredLanguages()
+      : undefined;
+  const indexed = lookupDispatcharrIndex(ctx.db, tmdbId, mediaType, preferredLanguages);
+  const dispatcharrFromIndex = indexed
+    ? dispatcharrAvailFromIndex(indexed, tmdbId, mediaType)
+    : null;
+
+  const cacheAvail = ctx.acquisitions.cacheAvailabilityFor({ tmdbId, mediaType });
+  const media = mergeResolvedMedia({
+    tmdbId,
+    mediaType,
+    seerrMedia,
+    jellyfinMedia,
+    dispatcharrMedia: null,
+    dispatcharrFromIndex,
+    cacheAvail,
+  });
+  if (!media) return null;
+
+  return {
+    media,
+    iptvResolvePending: indexed == null,
+  };
+}
+
+/**
+ * Live Dispatcharr search for a title; remembers hits in the SQLite index.
+ */
+export async function resolveMediaAvailabilityByTmdb(
+  ctx: AppContext,
+  userContext: UserContext,
+  mediaType: "movie" | "tv",
+  tmdbId: number,
+): Promise<Media | null> {
+  const getDetails = ctx.seerr.getDetails?.bind(ctx.seerr);
+
+  const [seerrMedia, jellyfinMedia] = await Promise.all([
+    getDetails ? getDetails(mediaType, tmdbId).catch(() => null) : Promise.resolve(null),
+    ctx.jellyfin.findByTmdb(userContext, tmdbId, mediaType).catch(() => null),
+  ]);
+
+  const preferredLanguages =
+    ctx.dispatcharr instanceof DispatcharrProvider
+      ? ctx.dispatcharr.getPreferredLanguages()
+      : undefined;
+  const indexed = lookupDispatcharrIndex(ctx.db, tmdbId, mediaType, preferredLanguages);
+
+  const dispatcharrMedia = await ctx.dispatcharr
+    .findVodByTmdb(tmdbId, mediaType, {
+      titleHint: seerrMedia?.metadata.title,
+      yearHint: seerrMedia?.metadata.year,
+      ...(indexed?.dispatcharrId != null ? { dispatcharrId: indexed.dispatcharrId } : {}),
+    })
+    .catch(() => null);
+
+  if (dispatcharrMedia) {
+    rememberDispatcharrMedia(ctx.db, dispatcharrMedia);
+  }
+
+  const cacheAvail = ctx.acquisitions.cacheAvailabilityFor({ tmdbId, mediaType });
+  return mergeResolvedMedia({
+    tmdbId,
+    mediaType,
+    seerrMedia,
+    jellyfinMedia,
+    dispatcharrMedia,
+    dispatcharrFromIndex: null,
+    cacheAvail,
+  });
 }
 
 /**

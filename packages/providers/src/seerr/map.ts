@@ -1,4 +1,4 @@
-import type { Media, MediaIdentity, RequestAvailability } from "@streamerr/shared";
+import type { CreditPerson, Media, MediaIdentity, RequestAvailability } from "@streamerr/shared";
 import { resolvePreferredAction } from "@streamerr/shared";
 import {
   MEDIA_STATUS_LABEL,
@@ -15,11 +15,102 @@ const TMDB_IMG = "https://image.tmdb.org/t/p";
 
 export function tmdbImageUrl(
   path: string | null | undefined,
-  size: "w300" | "w500" | "w1280",
+  size: "w185" | "w300" | "w500" | "w1280",
 ): string | undefined {
   if (!path) return undefined;
   if (path.startsWith("http")) return path.replace("/original/", `/${size}/`);
   return `${TMDB_IMG}/${size}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+type SeerrCreditLike = {
+  id?: number;
+  name?: string;
+  original_name?: string;
+  character?: string | null;
+  job?: string | null;
+  profilePath?: string | null;
+  profile_path?: string | null;
+  order?: number | null;
+};
+
+function creditPerson(
+  person: SeerrCreditLike,
+  role?: string | null,
+): CreditPerson | null {
+  const name = (person.name || person.original_name || "").trim();
+  if (!name) return null;
+  const profilePath = person.profilePath ?? person.profile_path;
+  return {
+    ...(typeof person.id === "number" ? { tmdbId: person.id } : {}),
+    name,
+    ...(role?.trim() ? { role: role.trim() } : {}),
+    ...(tmdbImageUrl(profilePath, "w185")
+      ? { profileUrl: tmdbImageUrl(profilePath, "w185") }
+      : {}),
+  };
+}
+
+function mapCredits(details: {
+  credits?: { cast?: SeerrCreditLike[]; crew?: SeerrCreditLike[] } | null;
+  createdBy?: SeerrCreditLike[];
+  genres?: Array<{ name: string }>;
+  productionCompanies?: Array<{ name: string }>;
+  networks?: Array<{ name: string }>;
+  keywords?: Array<{ name: string }>;
+  tagline?: string | null;
+  mediaType: "movie" | "tv";
+}) {
+  const cast = (details.credits?.cast ?? [])
+    .slice()
+    .sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
+    .map((p) => creditPerson(p, p.character))
+    .filter((p): p is CreditPerson => p != null)
+    .slice(0, 24);
+
+  const crew = details.credits?.crew ?? [];
+  const directors = crew
+    .filter((c) => c.job === "Director")
+    .map((p) => creditPerson(p, p.job))
+    .filter((p): p is CreditPerson => p != null);
+  const writers = crew
+    .filter((c) => c.job === "Writer" || c.job === "Screenplay" || c.job === "Story")
+    .map((p) => creditPerson(p, p.job))
+    .filter((p): p is CreditPerson => p != null);
+  const creatorsFromShow = (details.createdBy ?? [])
+    .map((p) => creditPerson(p, "Creator"))
+    .filter((p): p is CreditPerson => p != null);
+
+  const creators =
+    details.mediaType === "tv"
+      ? (creatorsFromShow.length ? creatorsFromShow : directors)
+      : directors;
+
+  const studios = [
+    ...(details.networks ?? []).map((n) => n.name),
+    ...(details.productionCompanies ?? []).map((c) => c.name),
+  ].filter(Boolean);
+
+  return {
+    ...(details.tagline?.trim() ? { tagline: details.tagline.trim() } : {}),
+    genres: details.genres?.map((g) => g.name).filter(Boolean),
+    ...(studios.length ? { studios: [...new Set(studios)].slice(0, 8) } : {}),
+    keywords: details.keywords?.map((k) => k.name).filter(Boolean).slice(0, 12),
+    ...(cast.length ? { cast } : {}),
+    ...(creators.length ? { creators: uniquePeople(creators).slice(0, 8) } : {}),
+    ...(writers.length ? { writers: uniquePeople(writers).slice(0, 8) } : {}),
+  };
+}
+
+function uniquePeople(people: CreditPerson[]): CreditPerson[] {
+  const seen = new Set<string>();
+  const out: CreditPerson[] = [];
+  for (const p of people) {
+    const key = String(p.tmdbId ?? p.name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+  return out;
 }
 
 function yearFromDate(date?: string | null): number | undefined {
@@ -94,6 +185,7 @@ export function mapSearchResultToMedia(result: SeerrSearchResult): Media | null 
 export function mapMovieDetailsToMedia(details: SeerrMovieDetails): Media {
   const seerrAvail = mapMediaInfoToRequestAvailability(details.mediaInfo);
   const availability = [seerrAvail];
+  const extras = mapCredits({ ...details, mediaType: "movie" });
   return {
     identity: {
       tmdbId: details.id,
@@ -108,6 +200,7 @@ export function mapMovieDetailsToMedia(details: SeerrMovieDetails): Media {
       posterUrl: tmdbImageUrl(details.posterPath, "w500"),
       backdropUrl: tmdbImageUrl(details.backdropPath, "w1280"),
       runtimeMinutes: details.runtime ?? undefined,
+      ...extras,
     },
     availability,
     preferredAction: resolvePreferredAction(availability),
@@ -117,6 +210,7 @@ export function mapMovieDetailsToMedia(details: SeerrMovieDetails): Media {
 export function mapTvDetailsToMedia(details: SeerrTvDetails): Media {
   const seerrAvail = mapMediaInfoToRequestAvailability(details.mediaInfo);
   const availability = [seerrAvail];
+  const extras = mapCredits({ ...details, mediaType: "tv" });
   return {
     identity: {
       tmdbId: details.id,
@@ -131,8 +225,8 @@ export function mapTvDetailsToMedia(details: SeerrTvDetails): Media {
       posterUrl: tmdbImageUrl(details.posterPath, "w500"),
       backdropUrl: tmdbImageUrl(details.backdropPath, "w1280"),
       runtimeMinutes: details.episodeRunTime?.find((n) => n > 0),
-      genres: details.genres?.map((g) => g.name).filter(Boolean),
       seriesStatus: details.status || undefined,
+      ...extras,
     },
     availability,
     preferredAction: resolvePreferredAction(availability),

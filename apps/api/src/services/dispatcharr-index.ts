@@ -22,7 +22,7 @@ export function rememberDispatcharrMedia(db: AppDb, media: Media): void {
         mediaType,
         dispatcharrId,
         uuid: da.uuid,
-        streamId: da.candidates[0]?.streamId,
+        streamId: da.candidates?.[0]?.streamId,
         title: media.metadata.title,
         catalogueLanguage: da.catalogueLanguage ?? null,
         updatedAt: new Date(),
@@ -32,7 +32,7 @@ export function rememberDispatcharrMedia(db: AppDb, media: Media): void {
         set: {
           dispatcharrId,
           uuid: da.uuid,
-          streamId: da.candidates[0]?.streamId,
+          streamId: da.candidates?.[0]?.streamId,
           title: media.metadata.title,
           catalogueLanguage: da.catalogueLanguage ?? null,
           updatedAt: new Date(),

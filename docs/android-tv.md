@@ -1,15 +1,17 @@
 # Android TV / Google TV
 
-Phase 8 is a React Native app in [`apps/tv`](../apps/tv) that shares [`@streamerr/client`](../packages/client) with the website. Playback uses ExoPlayer through `react-native-video`.
+Phase 8 is a React Native app in [`apps/tv`](../apps/tv) that shares [`@streamerr/client`](../packages/client) and [`@streamerr/native-ui`](../packages/native-ui) with mobile and the website. Playback uses ExoPlayer through `react-native-video`.
 
 ```text
-apps/web (React DOM)
-apps/tv  (React Native + Expo TV)
+apps/web    (Expo RN Web + @streamerr/native-ui)
+apps/tv     (React Native + Expo TV)
+apps/mobile (React Native + Expo)
         │
-        └── @streamerr/client → Streamerr API
+        ├── @streamerr/client → Streamerr API
+        └── @streamerr/native-ui
 ```
 
-The website stays Vite + CSS. TV screens are written for the remote.
+See [native-unification.md](./native-unification.md). TV screens are written for the remote (D-pad `Chrome`).
 
 ## Features
 
@@ -37,20 +39,3 @@ cd apps/tv
 EXPO_TV=1 npx expo prebuild --clean
 EXPO_TV=1 npx expo run:android
 ```
-
-Needs Android Studio with an Android TV system image, or a Google TV with network debugging.
-
-## Sideload
-
-1. Build a release APK: `cd apps/tv && EXPO_TV=1 npx expo run:android --variant release` (or assemble after prebuild).
-2. On the TV: Settings → About → select the Android build row until developer options appear. Enable Network debugging.
-3. On the same LAN:
-
-```bash
-adb connect <tv-ip>:5555
-adb install -r android/app/build/outputs/apk/release/app-release.apk
-```
-
-Without a computer: install Downloader from the Play Store, allow unknown apps for Downloader, and open an `https` URL that serves the APK.
-
-On first launch, enter the Streamerr origin (for example `http://192.168.1.10:8787`) and sign in with Jellyfin.

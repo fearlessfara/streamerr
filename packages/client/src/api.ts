@@ -50,6 +50,24 @@ function clampBitrate(bps: number): number {
   return Math.min(BW_MAX, Math.max(BW_MIN, Math.floor(bps)));
 }
 
+async function parseJsonResponse<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  const trimmed = text.trim();
+  if (!trimmed) return {} as T;
+  if (trimmed.startsWith("<!") || trimmed.startsWith("<html")) {
+    throw new Error(
+      "Got an HTML page instead of the API. Point the app at the Streamerr API (port 8787), not the web UI.",
+    );
+  }
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch {
+    throw new Error(
+      `API returned non-JSON (HTTP ${res.status}). Check that the Streamerr API is running.`,
+    );
+  }
+}
+
 function joinUrl(baseUrl: string, path: string): string {
   if (!baseUrl) return path;
   const origin = baseUrl.replace(/\/$/, "");
@@ -93,11 +111,12 @@ export class StreamerrClient {
         ...init?.headers,
       },
     });
+    const data = await parseJsonResponse<T>(res);
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      const body = data as { error?: string };
       throw new Error(body.error || `HTTP ${res.status}`);
     }
-    return res.json() as Promise<T>;
+    return data;
   }
 
   login(input: { username: string; password: string; deviceId: string; deviceName: string }) {
@@ -131,11 +150,12 @@ export class StreamerrClient {
         ...init?.headers,
       },
     });
+    const data = await parseJsonResponse<T>(res);
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      const body = data as { error?: string };
       throw new Error(body.error || `HTTP ${res.status}`);
     }
-    return { data: (await res.json()) as T, headers: res.headers };
+    return { data, headers: res.headers };
   }
 
   async logout() {
@@ -171,7 +191,13 @@ export class StreamerrClient {
   }
 
   mediaByTmdb(type: "movie" | "tv", tmdbId: number) {
-    return this.request<{ media: Media }>(`/api/media/${type}/${tmdbId}`);
+    return this.request<{ media: Media; iptvResolvePending: boolean }>(
+      `/api/media/${type}/${tmdbId}`,
+    );
+  }
+
+  mediaAvailability(type: "movie" | "tv", tmdbId: number) {
+    return this.request<{ media: Media }>(`/api/media/${type}/${tmdbId}/availability`);
   }
 
   seriesEpisodes(tmdbId: number) {
@@ -179,6 +205,12 @@ export class StreamerrClient {
       series: Media;
       seasons: number[];
       items: EpisodeListItem[];
+      resumeEpisode?: {
+        seasonNumber: number;
+        episodeNumber: number;
+        positionSeconds: number;
+        durationSeconds?: number;
+      } | null;
     }>(`/api/media/tv/${tmdbId}/episodes`);
   }
 
@@ -570,6 +602,10 @@ export function mediaByJellyfin(itemId: string) {
 
 export function mediaByTmdb(type: "movie" | "tv", tmdbId: number) {
   return getClient().mediaByTmdb(type, tmdbId);
+}
+
+export function mediaAvailability(type: "movie" | "tv", tmdbId: number) {
+  return getClient().mediaAvailability(type, tmdbId);
 }
 
 export function seriesEpisodes(tmdbId: number) {

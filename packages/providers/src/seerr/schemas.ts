@@ -101,6 +101,41 @@ const ExternalIdsSchema = z
   })
   .passthrough();
 
+const SeerrGenreSchema = z
+  .object({
+    id: z.number().optional(),
+    name: z.string(),
+  })
+  .passthrough();
+
+const SeerrCreditPersonSchema = z
+  .object({
+    id: z.number().optional(),
+    name: z.string().optional(),
+    original_name: z.string().optional(),
+    character: z.string().nullable().optional(),
+    job: z.string().nullable().optional(),
+    department: z.string().nullable().optional(),
+    order: z.number().nullable().optional(),
+    profilePath: z.string().nullable().optional(),
+    profile_path: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const SeerrCreditsSchema = z
+  .object({
+    cast: z.array(SeerrCreditPersonSchema).optional(),
+    crew: z.array(SeerrCreditPersonSchema).optional(),
+  })
+  .passthrough();
+
+const SeerrNamedSchema = z
+  .object({
+    id: z.number().optional(),
+    name: z.string(),
+  })
+  .passthrough();
+
 export const SeerrMovieDetailsSchema = z
   .object({
     id: z.number(),
@@ -109,18 +144,16 @@ export const SeerrMovieDetailsSchema = z
     imdbId: z.string().nullable().optional(),
     externalIds: ExternalIdsSchema.nullable().optional(),
     overview: z.string().optional().nullable(),
+    tagline: z.string().optional().nullable(),
     posterPath: z.string().optional().nullable(),
     backdropPath: z.string().optional().nullable(),
     releaseDate: z.string().optional().nullable(),
     runtime: z.number().optional().nullable(),
+    genres: z.array(SeerrGenreSchema).optional(),
+    productionCompanies: z.array(SeerrNamedSchema).optional(),
+    keywords: z.array(SeerrNamedSchema).optional(),
+    credits: SeerrCreditsSchema.optional().nullable(),
     mediaInfo: MediaInfoSchema.optional().nullable(),
-  })
-  .passthrough();
-
-const SeerrGenreSchema = z
-  .object({
-    id: z.number().optional(),
-    name: z.string(),
   })
   .passthrough();
 
@@ -169,6 +202,7 @@ export const SeerrTvDetailsSchema = z
     imdbId: z.string().nullable().optional(),
     externalIds: ExternalIdsSchema.nullable().optional(),
     overview: z.string().optional().nullable(),
+    tagline: z.string().optional().nullable(),
     posterPath: z.string().optional().nullable(),
     backdropPath: z.string().optional().nullable(),
     firstAirDate: z.string().optional().nullable(),
@@ -178,6 +212,11 @@ export const SeerrTvDetailsSchema = z
     numberOfSeasons: z.number().optional(),
     numberOfEpisodes: z.number().optional(),
     seasons: z.array(SeerrTvSeasonSummarySchema).optional(),
+    createdBy: z.array(SeerrCreditPersonSchema).optional(),
+    networks: z.array(SeerrNamedSchema).optional(),
+    productionCompanies: z.array(SeerrNamedSchema).optional(),
+    keywords: z.array(SeerrNamedSchema).optional(),
+    credits: SeerrCreditsSchema.optional().nullable(),
     mediaInfo: MediaInfoSchema.optional().nullable(),
   })
   .passthrough();

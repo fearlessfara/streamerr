@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "Streamerr",
+    "slug": "streamerr-web",
+    "version": "0.1.0",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "scheme": "streamerr",
+    "platforms": ["web"],
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "streamerr-web"
+      }
+    }
+  }
+}

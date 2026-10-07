@@ -5,6 +5,7 @@ build/
 coverage/
 *.tsbuildinfo
 .vite/
+.expo/
 apps/web/dist/
 apps/api/dist/
 packages/*/dist/

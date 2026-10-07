@@ -129,6 +129,43 @@ export class IptvProgressStore {
       .run();
   }
 
+  /**
+   * In-progress IPTV episodes for a series (most recently watched first).
+   * Used to show Resume on series details and seek into the right episode.
+   */
+  listInProgressForSeries(
+    userId: string,
+    seriesTmdbId: number,
+  ): Array<{
+    seasonNumber: number;
+    episodeNumber: number;
+    positionSeconds: number;
+    durationSeconds?: number;
+  }> {
+    const rows = this.db
+      .select()
+      .from(playbackProgress)
+      .where(and(eq(playbackProgress.userId, userId), eq(playbackProgress.completed, false)))
+      .orderBy(desc(playbackProgress.updatedAt))
+      .all()
+      .filter(
+        (r) =>
+          r.provider === "dispatcharr" &&
+          r.mediaType === "episode" &&
+          r.tmdbId === seriesTmdbId &&
+          (r.positionSeconds ?? 0) > 30 &&
+          r.seasonNumber != null &&
+          r.episodeNumber != null,
+      );
+
+    return rows.map((r) => ({
+      seasonNumber: r.seasonNumber!,
+      episodeNumber: r.episodeNumber!,
+      positionSeconds: r.positionSeconds,
+      durationSeconds: r.durationSeconds ?? undefined,
+    }));
+  }
+
   listContinue(userId: string, limit = 20): Media[] {
     const rows = this.db
       .select()

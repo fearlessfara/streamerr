@@ -12,6 +12,7 @@ export {
   home,
   mediaByJellyfin,
   mediaByTmdb,
+  mediaAvailability,
   seriesEpisodes,
   discoverMovies,
   discoverTv,
@@ -77,3 +78,9 @@ export {
   BW_PROBE_CACHE_KEY,
 } from "./storage.js";
 export type { KeyValueStorage } from "./storage.js";
+export type {
+  PlaybackSurfaceEvents,
+  PlaybackSurfaceHandle,
+  PlaybackSurfaceAttachOpts,
+  PlaybackSurfaceFactory,
+} from "./playback-surface.js";

@@ -1,8 +1,9 @@
 import { and, eq, lt, or, sql } from "drizzle-orm";
-import { pickPreferredByCatalogueLanguage } from "@streamerr/shared";
-import type { DispatcharrProvider } from "@streamerr/providers";
+import { pickPreferredByCatalogueLanguage, type Media } from "@streamerr/shared";
+import type { DiscoveryProvider, DispatcharrProvider } from "@streamerr/providers";
 import type { AppDb } from "../db/client.js";
 import { dispatcharrTmdbIndex } from "../db/schema.js";
+import { MOVIE_GENRE_RAILS, TV_GENRE_RAILS } from "./catalog-genres.js";
 
 export interface VodCatalogCandidate {
   dispatcharrId: number;
@@ -88,9 +89,9 @@ export function applyCatalogWinners(
       .run();
   }
 
-  // Only prune when the scan covered every page — a partial pass must not wipe the index.
+  // Hot-title warm never prunes — opportunistic index hits must survive.
   let removed = 0;
-  if (opts?.pruneStale !== false) {
+  if (opts?.pruneStale === true) {
     removed = db
       .delete(dispatcharrTmdbIndex)
       .where(lt(dispatcharrTmdbIndex.updatedAt, now))
@@ -100,151 +101,174 @@ export function applyCatalogWinners(
   return { upserted: winners.length, removed };
 }
 
-const CATALOG_PAGE_CONCURRENCY = 4;
-const CATALOG_PAGE_RETRIES = 3;
+export interface HotVodTarget {
+  tmdbId: number;
+  mediaType: "movie" | "tv";
+  titleHint?: string;
+  yearHint?: number;
+}
 
-function pushPageItems(
-  candidates: VodCatalogCandidate[],
-  mediaType: "movie" | "tv",
-  items: Array<{ id: number; uuid: string; name: string; tmdbId: number }>,
-): void {
+const WARM_CONCURRENCY = 2;
+const WARM_RETRIES = 3;
+
+function pushMediaTargets(into: Map<string, HotVodTarget>, items: Media[]): void {
   for (const item of items) {
-    candidates.push({
-      dispatcharrId: item.id,
-      uuid: item.uuid,
-      name: item.name,
-      tmdbId: item.tmdbId,
+    const tmdbId = item.identity.tmdbId;
+    const mediaType = item.identity.mediaType;
+    if (!tmdbId || (mediaType !== "movie" && mediaType !== "tv")) continue;
+    const key = `${mediaType}:${tmdbId}`;
+    if (into.has(key)) continue;
+    into.set(key, {
+      tmdbId,
       mediaType,
+      titleHint: item.metadata.title,
+      yearHint: item.metadata.year,
     });
   }
 }
 
-async function fetchCatalogPage(
+/** Collect unique hot TMDb titles from the same Seerr page‑1 rails the UI shows. */
+export async function collectHotVodTargets(seerr: DiscoveryProvider): Promise<HotVodTarget[]> {
+  const byKey = new Map<string, HotVodTarget>();
+
+  const homeRails = await Promise.all([
+    seerr.discoverTrending({ page: 1 }).catch(() => [] as Media[]),
+    seerr.discoverMovies
+      ? seerr.discoverMovies({ page: 1 }).catch(() => [] as Media[])
+      : Promise.resolve([] as Media[]),
+    seerr.discoverTv
+      ? seerr.discoverTv({ page: 1 }).catch(() => [] as Media[])
+      : Promise.resolve([] as Media[]),
+  ]);
+  for (const rail of homeRails) pushMediaTargets(byKey, rail);
+
+  const catalogRails = await Promise.all([
+    seerr.discoverTrending({ page: 1, mediaType: "movie" }).catch(() => [] as Media[]),
+    seerr.discoverTrending({ page: 1, mediaType: "tv" }).catch(() => [] as Media[]),
+    seerr.discoverMovies
+      ? seerr.discoverMovies({ page: 1 }).catch(() => [] as Media[])
+      : Promise.resolve([] as Media[]),
+    seerr.discoverTv
+      ? seerr.discoverTv({ page: 1 }).catch(() => [] as Media[])
+      : Promise.resolve([] as Media[]),
+    ...MOVIE_GENRE_RAILS.map((g) =>
+      seerr.discoverMovies
+        ? seerr.discoverMovies({ page: 1, genreId: g.genreId }).catch(() => [] as Media[])
+        : Promise.resolve([] as Media[]),
+    ),
+    ...TV_GENRE_RAILS.map((g) =>
+      seerr.discoverTv
+        ? seerr.discoverTv({ page: 1, genreId: g.genreId }).catch(() => [] as Media[])
+        : Promise.resolve([] as Media[]),
+    ),
+  ]);
+  for (const rail of catalogRails) pushMediaTargets(byKey, rail);
+
+  return [...byKey.values()];
+}
+
+async function resolveHotTarget(
   dispatcharr: DispatcharrProvider,
-  mediaType: "movie" | "tv",
-  page: number,
-): Promise<{
-  items: Array<{ id: number; uuid: string; name: string; tmdbId: number }>;
-  count: number;
-  page: number;
-  pageSize: number;
-  rawCount: number;
-} | null> {
+  target: HotVodTarget,
+): Promise<VodCatalogWinner | null> {
   let lastErr: unknown;
-  for (let attempt = 1; attempt <= CATALOG_PAGE_RETRIES; attempt++) {
+  for (let attempt = 1; attempt <= WARM_RETRIES; attempt++) {
     try {
-      return await dispatcharr.pageVodCatalogue(mediaType, { page, pageSize: 100 });
+      const match = await dispatcharr.findVodCatalogueMatch(target.tmdbId, target.mediaType, {
+        titleHint: target.titleHint,
+        yearHint: target.yearHint,
+      });
+      if (!match) return null;
+      return {
+        tmdbId: target.tmdbId,
+        mediaType: target.mediaType,
+        dispatcharrId: match.id,
+        uuid: match.uuid,
+        title: match.name,
+        catalogueLanguage: match.catalogueLanguage,
+      };
     } catch (err) {
       lastErr = err;
       const delayMs = attempt * 1_500;
       console.warn(
-        `[vod-index] ${mediaType} page ${page} attempt ${attempt}/${CATALOG_PAGE_RETRIES} failed — retry in ${delayMs}ms`,
+        `[vod-index] ${target.mediaType}:${target.tmdbId} attempt ${attempt}/${WARM_RETRIES} failed — retry in ${delayMs}ms`,
         err instanceof Error ? err.message : err,
       );
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }
-  console.error(
-    `[vod-index] ${mediaType} page ${page} skipped after retries`,
+  console.warn(
+    `[vod-index] ${target.mediaType}:${target.tmdbId} skipped after retries`,
     lastErr instanceof Error ? lastErr.message : lastErr,
   );
   return null;
 }
 
-/**
- * Page the Dispatcharr catalogue. Metadata REST only (no IPTV streams).
- * Pages run with modest concurrency — sequential would take hours on 70k+ catalogs.
- * Individual page failures are skipped after retries so one timeout does not abort the scan.
- */
-async function collectCatalogue(
-  dispatcharr: DispatcharrProvider,
-  mediaType: "movie" | "tv",
-): Promise<{ candidates: VodCatalogCandidate[]; skipped: number }> {
-  const candidates: VodCatalogCandidate[] = [];
-  const first = await fetchCatalogPage(dispatcharr, mediaType, 1);
-  if (!first) {
-    throw new Error(`Dispatcharr ${mediaType} catalogue page 1 failed`);
-  }
-  pushPageItems(candidates, mediaType, first.items);
-  if (first.rawCount === 0) return { candidates, skipped: 0 };
-
-  const totalPages = Math.min(
-    2000,
-    Math.max(1, Math.ceil(first.count / first.pageSize)),
-  );
-  console.info(`[vod-index] ${mediaType}: scanning ${totalPages} page(s)`);
-
-  let nextPage = 2;
-  let completed = 1;
-  let skipped = 0;
-
-  const worker = async () => {
-    while (true) {
-      const page = nextPage;
-      nextPage += 1;
-      if (page > totalPages) return;
-      const result = await fetchCatalogPage(dispatcharr, mediaType, page);
-      if (!result) {
-        skipped += 1;
-        completed += 1;
-        continue;
-      }
-      if (result.rawCount === 0) {
-        nextPage = totalPages + 1;
-        return;
-      }
-      pushPageItems(candidates, mediaType, result.items);
-      completed += 1;
-      if (completed % 50 === 0 || completed >= totalPages) {
-        console.info(
-          `[vod-index] ${mediaType}: ${Math.min(completed, totalPages)}/${totalPages} pages (skipped=${skipped})`,
-        );
-      }
-    }
-  };
-
-  const workers = Array.from(
-    { length: Math.min(CATALOG_PAGE_CONCURRENCY, Math.max(1, totalPages - 1)) },
-    () => worker(),
-  );
-  await Promise.all(workers);
-  if (skipped > 0) {
-    console.warn(`[vod-index] ${mediaType}: finished with ${skipped} skipped page(s)`);
-  }
-  return { candidates, skipped };
-}
-
 export interface VodCatalogSyncResult {
+  targets: number;
+  found: number;
+  missed: number;
   movies: number;
   series: number;
   upserted: number;
   removed: number;
 }
 
+/**
+ * Warm the Dispatcharr TMDb index from Seerr hot discovery titles (page‑1 rails).
+ * Does not page the full IPTV catalogue.
+ */
 export async function syncVodCatalog(opts: {
   db: AppDb;
   dispatcharr: DispatcharrProvider;
+  seerr: DiscoveryProvider;
   preferredLanguages: string[];
 }): Promise<VodCatalogSyncResult> {
-  const movies = await collectCatalogue(opts.dispatcharr, "movie");
-  const series = await collectCatalogue(opts.dispatcharr, "tv");
-  const winners = pickCatalogWinners(
-    [...movies.candidates, ...series.candidates],
-    opts.preferredLanguages,
+  const targets = await collectHotVodTargets(opts.seerr);
+  console.info(`[vod-index] warming ${targets.length} hot title(s)`);
+
+  const winners: VodCatalogWinner[] = [];
+  let next = 0;
+  let missed = 0;
+
+  const worker = async () => {
+    while (true) {
+      const i = next;
+      next += 1;
+      if (i >= targets.length) return;
+      const target = targets[i]!;
+      const hit = await resolveHotTarget(opts.dispatcharr, target);
+      if (hit) winners.push(hit);
+      else missed += 1;
+      const done = winners.length + missed;
+      if (done % 25 === 0 || done >= targets.length) {
+        console.info(
+          `[vod-index] warm ${done}/${targets.length} (found=${winners.length} missed=${missed})`,
+        );
+      }
+    }
+  };
+
+  const workers = Array.from(
+    { length: Math.min(WARM_CONCURRENCY, Math.max(1, targets.length)) },
+    () => worker(),
   );
+  await Promise.all(workers);
+
   const syncedAt = new Date();
-  const complete = movies.skipped === 0 && series.skipped === 0;
   const { upserted, removed } = applyCatalogWinners(opts.db, winners, syncedAt, {
-    pruneStale: complete,
+    pruneStale: false,
   });
-  if (!complete) {
-    console.warn(
-      `[vod-index] partial sync — upserted without pruning (movieGaps=${movies.skipped} seriesGaps=${series.skipped})`,
-    );
-  }
+
+  const movies = winners.filter((w) => w.mediaType === "movie").length;
+  const series = winners.filter((w) => w.mediaType === "tv").length;
+
   return {
-    movies: movies.candidates.length,
-    series: series.candidates.length,
+    targets: targets.length,
+    found: winners.length,
+    missed,
+    movies,
+    series,
     upserted,
     removed,
   };
@@ -253,6 +277,7 @@ export async function syncVodCatalog(opts: {
 export function startVodCatalogSync(opts: {
   db: AppDb;
   dispatcharr: DispatcharrProvider;
+  seerr: DiscoveryProvider;
   preferredLanguages: string[];
   intervalMs: number;
   enabled: boolean;
@@ -270,7 +295,7 @@ export function startVodCatalogSync(opts: {
     try {
       const result = await syncVodCatalog(opts);
       console.info(
-        `[vod-index] synced movies=${result.movies} series=${result.series} upserted=${result.upserted} removed=${result.removed}`,
+        `[vod-index] warmed targets=${result.targets} found=${result.found} missed=${result.missed} upserted=${result.upserted}`,
       );
     } catch (err) {
       console.error("[vod-index] sync failed — previous index kept", err);

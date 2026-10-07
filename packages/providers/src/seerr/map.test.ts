@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { mapMediaInfoToRequestAvailability, mapSearchResultToMedia, mapSeerrEpisodeToMedia } from "./map.js";
+import {
+  mapMediaInfoToRequestAvailability,
+  mapMovieDetailsToMedia,
+  mapSearchResultToMedia,
+  mapSeerrEpisodeToMedia,
+  mapTvDetailsToMedia,
+} from "./map.js";
 import { SeerrMediaStatus, SeerrRequestStatus } from "./schemas.js";
 
 describe("seerr map", () => {
@@ -86,5 +92,56 @@ describe("seerr map", () => {
         name: "Someone",
       }),
     ).toBeNull();
+  });
+
+  it("maps movie credits, genres, and studios", () => {
+    const media = mapMovieDetailsToMedia({
+      id: 550,
+      title: "Fight Club",
+      releaseDate: "1999-10-15",
+      tagline: "Mischief. Mayhem. Soap.",
+      genres: [{ id: 18, name: "Drama" }],
+      productionCompanies: [{ id: 1, name: "Fox 2000 Pictures" }],
+      keywords: [{ id: 1, name: "dual identity" }],
+      credits: {
+        cast: [
+          {
+            id: 819,
+            name: "Edward Norton",
+            character: "Narrator",
+            order: 0,
+            profilePath: "/norton.jpg",
+          },
+        ],
+        crew: [
+          { id: 7467, name: "David Fincher", job: "Director", profilePath: "/df.jpg" },
+          { id: 1, name: "Jim Uhls", job: "Screenplay" },
+        ],
+      },
+    });
+    expect(media.metadata.tagline).toBe("Mischief. Mayhem. Soap.");
+    expect(media.metadata.genres).toEqual(["Drama"]);
+    expect(media.metadata.studios).toEqual(["Fox 2000 Pictures"]);
+    expect(media.metadata.cast?.[0]).toMatchObject({
+      name: "Edward Norton",
+      role: "Narrator",
+    });
+    expect(media.metadata.cast?.[0]?.profileUrl).toContain("/w185/norton.jpg");
+    expect(media.metadata.creators?.[0]?.name).toBe("David Fincher");
+    expect(media.metadata.writers?.[0]?.name).toBe("Jim Uhls");
+  });
+
+  it("maps series creators from createdBy", () => {
+    const media = mapTvDetailsToMedia({
+      id: 1396,
+      name: "Breaking Bad",
+      createdBy: [{ id: 66633, name: "Vince Gilligan", profile_path: "/vg.jpg" }],
+      genres: [{ id: 18, name: "Drama" }],
+      credits: {
+        cast: [{ id: 17419, name: "Bryan Cranston", character: "Walter White", order: 0 }],
+      },
+    });
+    expect(media.metadata.creators?.[0]?.name).toBe("Vince Gilligan");
+    expect(media.metadata.cast?.[0]?.name).toBe("Bryan Cranston");
   });
 });

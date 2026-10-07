@@ -48,7 +48,7 @@ export function actionLabel(media: Media): string {
     case "PLAY_CACHE":
     case "PLAY_IPTV": {
       if (resumePositionSeconds(media) != null) {
-        return "▶ Continue";
+        return "▶ Resume";
       }
       return "▶ Play";
     }

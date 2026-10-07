@@ -1,0 +1,172 @@
+import { useState, type ReactNode } from "react";
+import { Platform, StyleSheet, Text, TextInput, View } from "react-native";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { getOrCreateDeviceId, login, type KeyValueStorage } from "@streamerr/client";
+import { Button } from "../Button.js";
+import { fieldStyles } from "../fieldStyles.js";
+import { colors } from "../theme.js";
+import { webGradient } from "../webStyle.js";
+import type { Appearance, ScreenNav } from "./types.js";
+
+export function LoginScreen({
+  nav,
+  storage,
+  deviceName,
+  paddingTop = 56,
+  paddingBottom = 24,
+  wrapper,
+  appearance = "native",
+}: {
+  nav: Pick<ScreenNav, "openServer" | "resetToMain">;
+  storage: KeyValueStorage;
+  deviceName: string;
+  paddingTop?: number;
+  paddingBottom?: number;
+  wrapper?: (children: ReactNode) => ReactNode;
+  appearance?: Appearance;
+}) {
+  const qc = useQueryClient();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: async () =>
+      login({
+        username,
+        password,
+        deviceId: await getOrCreateDeviceId(storage),
+        deviceName,
+      }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["me"] });
+      nav.resetToMain?.();
+    },
+  });
+
+  if (appearance === "web") {
+    const webBody = (
+      <View style={styles.webPage}>
+        <View
+          style={[
+            StyleSheet.absoluteFill,
+            { pointerEvents: "none" },
+            webGradient(
+              "linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.82)), radial-gradient(900px 520px at 15% 10%, rgba(229,9,20,0.35), transparent 55%), linear-gradient(135deg, #1b0a0c 0%, #141414 45%, #0b1020 100%)",
+            ),
+          ]}
+        />
+        <Text style={styles.webWordmark}>STREAMERR</Text>
+        <View style={styles.webForm}>
+          <Text style={styles.webTitle}>Sign In</Text>
+          <Text style={styles.webCopy}>Your media. One stream. Use your Jellyfin account.</Text>
+          {mutation.isError ? <Text style={styles.error}>{(mutation.error as Error).message}</Text> : null}
+          <TextInput
+            style={[fieldStyles.input, styles.webInput]}
+            value={username}
+            onChangeText={setUsername}
+            placeholder="Email or username"
+            placeholderTextColor="#8c8c8c"
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoFocus
+          />
+          <TextInput
+            style={[fieldStyles.input, styles.webInput]}
+            value={password}
+            onChangeText={setPassword}
+            placeholder="Password"
+            placeholderTextColor="#8c8c8c"
+            secureTextEntry
+          />
+          <Button
+            label={mutation.isPending ? "Signing in…" : "Sign In"}
+            variant="accent"
+            style={styles.action}
+            onPress={() => mutation.mutate()}
+            disabled={mutation.isPending}
+          />
+          <View style={{ height: 12 }} />
+          <Button
+            label="Change server"
+            variant="ghost"
+            style={styles.action}
+            onPress={() => nav.openServer?.({ change: true })}
+          />
+        </View>
+      </View>
+    );
+    return <>{wrapper ? wrapper(webBody) : webBody}</>;
+  }
+
+  const body = (
+    <View style={[styles.page, { paddingTop, paddingBottom }]}>
+      <Text style={styles.wordmark}>STREAMERR</Text>
+      <Text style={styles.title}>Sign In</Text>
+      <Text style={styles.copy}>Your media. One stream. Use your Jellyfin account.</Text>
+      {mutation.isError ? <Text style={styles.error}>{(mutation.error as Error).message}</Text> : null}
+      <TextInput
+        style={fieldStyles.input}
+        value={username}
+        onChangeText={setUsername}
+        placeholder="Username"
+        placeholderTextColor={colors.muted}
+        autoCapitalize="none"
+        autoCorrect={false}
+        autoFocus
+      />
+      <TextInput
+        style={fieldStyles.input}
+        value={password}
+        onChangeText={setPassword}
+        placeholder="Password"
+        placeholderTextColor={colors.muted}
+        secureTextEntry
+      />
+      <Button
+        label={mutation.isPending ? "Signing in…" : "Sign In"}
+        style={styles.action}
+        onPress={() => mutation.mutate()}
+        disabled={mutation.isPending}
+      />
+      <View style={{ height: 12 }} />
+      <Button
+        label="Change server"
+        variant="ghost"
+        style={styles.action}
+        onPress={() => nav.openServer?.({ change: true })}
+      />
+    </View>
+  );
+
+  return <>{wrapper ? wrapper(body) : body}</>;
+}
+
+export const loginKeyboardBehavior = Platform.OS === "ios" ? ("padding" as const) : undefined;
+
+const styles = StyleSheet.create({
+  page: {
+    flex: 1,
+    backgroundColor: colors.bg,
+    paddingHorizontal: 24,
+    justifyContent: "center",
+  },
+  wordmark: { color: colors.accent, fontSize: 26, fontWeight: "800", marginBottom: 20 },
+  title: { color: colors.text, fontSize: 26, fontWeight: "700", marginBottom: 10 },
+  copy: { color: colors.muted, fontSize: 15, marginBottom: 20, lineHeight: 21 },
+  action: { alignSelf: "stretch" },
+  error: { color: colors.danger, marginBottom: 12, fontSize: 14 },
+  webPage: { flex: 1, backgroundColor: "#141414", justifyContent: "center", alignItems: "center" },
+  webWordmark: {
+    position: "absolute",
+    top: 28,
+    left: 48,
+    color: colors.accent,
+    fontSize: 32,
+    fontWeight: "800",
+    letterSpacing: -0.6,
+  },
+  webForm: { width: "100%", maxWidth: 450, paddingHorizontal: 24, zIndex: 1 },
+  webTitle: { color: "#fff", fontSize: 32, fontWeight: "700", marginBottom: 12 },
+  webCopy: { color: "#b3b3b3", fontSize: 16, lineHeight: 22, marginBottom: 24 },
+  webInput: { backgroundColor: "#333", borderRadius: 4, marginBottom: 16 },
+});
