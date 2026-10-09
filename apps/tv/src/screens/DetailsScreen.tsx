@@ -1,3 +1,4 @@
+import { TVFocusGuideView } from "react-native";
 import { useRoute, type RouteProp } from "@react-navigation/native";
 import { DetailsScreen as SharedDetails } from "@streamerr/native-ui";
 import type { RootStackParamList } from "../nav";
@@ -9,12 +10,22 @@ export function DetailsScreen(_props: { username: string }) {
   const nav = useScreenNav();
   const route = useRoute<RouteProp<RootStackParamList, "Details">>();
   return (
-    <SharedDetails
-      nav={nav}
-      params={route.params}
-      focusMode="tv"
-      appearance="web"
-      layout={layout}
-    />
+    // Trap D-pad inside the transparent modal so Home behind it cannot take focus.
+    <TVFocusGuideView
+      style={{ flex: 1 }}
+      autoFocus
+      trapFocusUp
+      trapFocusDown
+      trapFocusLeft
+      trapFocusRight
+    >
+      <SharedDetails
+        nav={nav}
+        params={route.params}
+        focusMode="tv"
+        appearance="web"
+        layout={layout}
+      />
+    </TVFocusGuideView>
   );
 }

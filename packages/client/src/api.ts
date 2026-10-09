@@ -305,10 +305,17 @@ export class StreamerrClient {
     );
   }
 
-  requestMedia(identity: MediaIdentity) {
+  requestMedia(
+    identity: MediaIdentity,
+    opts?: { seasons?: number[] | "all"; is4k?: boolean },
+  ) {
     return this.request<{ ok: true; media: Media | null }>("/api/request", {
       method: "POST",
-      body: JSON.stringify({ identity }),
+      body: JSON.stringify({
+        identity,
+        seasons: opts?.seasons,
+        is4k: opts?.is4k,
+      }),
     });
   }
 
@@ -744,8 +751,11 @@ export function searchMedia(q: string, page = 1) {
   return getClient().searchMedia(q, page);
 }
 
-export function requestMedia(identity: MediaIdentity) {
-  return getClient().requestMedia(identity);
+export function requestMedia(
+  identity: MediaIdentity,
+  opts?: { seasons?: number[] | "all"; is4k?: boolean },
+) {
+  return getClient().requestMedia(identity, opts);
 }
 
 export function startAcquisition(

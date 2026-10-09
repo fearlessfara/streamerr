@@ -7,7 +7,7 @@ export function RequestsScreen({ username }: { username: string }) {
   const nav = useScreenNav();
   return (
     <Chrome username={username}>
-      <SharedRequests nav={nav} header={<PageHeading title="Requests" />} />
+      <SharedRequests nav={nav} header={<PageHeading title="Requests" />} focusMode="tv" />
     </Chrome>
   );
 }

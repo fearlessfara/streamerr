@@ -18,6 +18,7 @@ import { HomeSkeleton } from "../Skeleton.js";
 import { openMedia } from "../media-nav.js";
 import { colors } from "../theme.js";
 import { usePlayMedia } from "../hooks/usePlayMedia.js";
+import { measureAndScrollIntoView } from "../tvScroll.js";
 import { webBg } from "../webStyle.js";
 import type { ScreenChromeProps } from "./types.js";
 
@@ -33,7 +34,7 @@ export function HomeScreen({
   const { playMedia, bufferStatus } = usePlayMedia(nav);
   const scrollRef = useRef<ScrollView>(null);
   const scrollY = useRef(0);
-  const railTops = useRef<Record<string, number>>({});
+  const railRefs = useRef<Record<string, View | null>>({});
   const tv = focusMode === "tv";
   const web = appearance === "web";
 
@@ -44,21 +45,11 @@ export function HomeScreen({
     return null;
   }, [homeQuery.data]);
 
-  const viewportH = (layout.height ?? 0) - (layout.headerH ?? 0);
-  const railBlockH = (layout.railTitleH ?? 0) + (layout.railListH ?? 0);
-
   function ensureRailVisible(rowId: string) {
     if (!tv) return;
-    const top = railTops.current[rowId];
-    if (top == null) return;
-    const bottom = top + railBlockH + 12;
-    const viewTop = scrollY.current;
-    const viewBottom = viewTop + viewportH;
-    if (bottom > viewBottom) {
-      scrollRef.current?.scrollTo({ y: bottom - viewportH + 8, animated: true });
-    } else if (top < viewTop) {
-      scrollRef.current?.scrollTo({ y: Math.max(0, top - 8), animated: true });
-    }
+    measureAndScrollIntoView(railRefs.current[rowId], scrollRef, scrollY, layout.height ?? 0, {
+      topInset: layout.headerH ?? 0,
+    });
   }
 
   function onScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
@@ -145,13 +136,7 @@ export function HomeScreen({
             onPlay={(media) => playMedia.mutate(media)}
             onFocusCard={tv ? () => ensureRailVisible(row.id) : undefined}
             preferFirst={tv && rowIndex === 0 && !featured}
-            onLayout={
-              tv
-                ? (e) => {
-                    railTops.current[row.id] = e.nativeEvent.layout.y;
-                  }
-                : undefined
-            }
+            railRef={tv ? (r) => { railRefs.current[row.id] = r; } : undefined}
           />
         ))}
         {homeQuery.isError ? (

@@ -7,7 +7,7 @@ export function LiveScreen({ username }: { username: string }) {
   const nav = useScreenNav();
   return (
     <Chrome username={username}>
-      <SharedLive nav={nav} header={<PageHeading title="Live TV" />} />
+      <SharedLive nav={nav} header={<PageHeading title="Live TV" />} focusMode="tv" />
     </Chrome>
   );
 }

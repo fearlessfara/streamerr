@@ -1,5 +1,13 @@
-import { useMemo, useState, type ReactNode } from "react";
-import { ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+} from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { actionLabel, catalogRails } from "@streamerr/client";
 import { Billboard } from "../Billboard.js";
@@ -8,6 +16,7 @@ import { RailSkeleton } from "../Skeleton.js";
 import { openMedia } from "../media-nav.js";
 import { colors } from "../theme.js";
 import { usePlayMedia } from "../hooks/usePlayMedia.js";
+import { measureAndScrollIntoView } from "../tvScroll.js";
 import { webBg } from "../webStyle.js";
 import type { ScreenChromeProps } from "./types.js";
 
@@ -37,6 +46,9 @@ export function CatalogScreen({
   const rows = catalog.data?.rows ?? [];
   const tv = focusMode === "tv";
   const web = appearance === "web";
+  const scrollRef = useRef<ScrollView>(null);
+  const scrollY = useRef(0);
+  const railRefs = useRef<Record<string, View | null>>({});
   const featured = useMemo(() => {
     if (!web || search.trim()) return null;
     for (const row of rows) {
@@ -47,6 +59,17 @@ export function CatalogScreen({
 
   const open = (media: Parameters<typeof openMedia>[1]) =>
     openMedia({ navigate: (_n, params) => nav.openDetails(params) }, media);
+
+  function ensureRailVisible(rowId: string) {
+    if (!tv) return;
+    measureAndScrollIntoView(railRefs.current[rowId], scrollRef, scrollY, layout.height ?? 0, {
+      topInset: layout.headerH ?? 0,
+    });
+  }
+
+  function onScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
+    scrollY.current = e.nativeEvent.contentOffset.y;
+  }
 
   const filter = searchInput ? (
     searchInput({ value: search, onChangeText: setSearch })
@@ -65,7 +88,12 @@ export function CatalogScreen({
   return (
     <View style={[styles.page, web && { backgroundColor: webBg }]}>
       {header}
-      <ScrollView contentContainerStyle={{ paddingBottom: 48 }}>
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={{ paddingBottom: 48 }}
+        onScroll={tv ? onScroll : undefined}
+        scrollEventThrottle={tv ? 16 : undefined}
+      >
         {web ? (
           <View style={[styles.titleRow, { paddingTop: (layout.headerH ?? 68) + 12, paddingHorizontal: layout.pageX }]}>
             <Text style={styles.pageTitle}>{pageTitle ?? (mediaType === "movie" ? "Movies" : "Series")}</Text>
@@ -105,6 +133,8 @@ export function CatalogScreen({
             railIndex={railIndex}
             onOpen={open}
             onPlay={(media) => playMedia.mutate(media)}
+            onFocusCard={tv ? () => ensureRailVisible(row.id) : undefined}
+            railRef={tv ? (r) => { railRefs.current[row.id] = r; } : undefined}
           />
         ))}
       </ScrollView>

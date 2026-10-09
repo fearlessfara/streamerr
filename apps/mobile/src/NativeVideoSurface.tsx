@@ -90,14 +90,15 @@ export function NativeVideoSurface(props: VideoSurfaceProps) {
           err?.localizedDescription ||
           (err?.code != null ? `code ${err.code}` : null) ||
           "Playback failed";
-        let host = "";
+        let where = "";
         try {
-          host = new URL(props.uri).host;
+          const u = new URL(props.uri);
+          where = `${u.host}${u.pathname}`;
         } catch {
-          host = props.uri.slice(0, 48);
+          where = props.uri.slice(0, 80);
         }
-        console.error("[NativeVideoSurface]", kind, host, detail, err);
-        props.onError(`${detail} (${kind} @ ${host})`);
+        console.error("[NativeVideoSurface]", kind, where, detail, err);
+        props.onError(`${detail} (${kind} @ ${where})`);
       }}
       textTracks={sideloaded}
       selectedTextTrack={selectedTextTrack}

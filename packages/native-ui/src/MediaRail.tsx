@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type Ref } from "react";
 import { FlatList, Text, View, type LayoutChangeEvent } from "react-native";
 import type { Media } from "@streamerr/shared";
 import { canPlayMedia } from "@streamerr/client";
@@ -28,6 +28,7 @@ export function MediaRail({
   onFocusCard,
   preferFirst = false,
   onLayout,
+  railRef,
 }: {
   title: string;
   items: Media[];
@@ -43,6 +44,8 @@ export function MediaRail({
   onFocusCard?: () => void;
   preferFirst?: boolean;
   onLayout?: (e: LayoutChangeEvent) => void;
+  /** Root rail view — used by TV pages to scroll focused rails into the viewport. */
+  railRef?: Ref<View>;
 }) {
   const browse = appearance === "web";
   // Browser uses hover popovers; Google TV uses D-pad scale cards on the same browse look.
@@ -50,6 +53,8 @@ export function MediaRail({
   const focusRails = browse && showFocusRing;
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listRef = useRef<FlatList<Media>>(null);
+  const stride = layout.cardWidth + layout.cardGap;
 
   function hoverIn(key: string) {
     if (closeTimer.current) {
@@ -76,6 +81,7 @@ export function MediaRail({
 
   return (
     <View
+      ref={railRef}
       onLayout={onLayout}
       {...(hoverRails ? ({ dataSet: { seRail: hot ? "hot" : "1" } } as object) : null)}
       style={{
@@ -147,6 +153,7 @@ export function MediaRail({
         </View>
       ) : (
         <FlatList
+          ref={listRef}
           horizontal
           showsHorizontalScrollIndicator={false}
           data={items}
@@ -158,6 +165,10 @@ export function MediaRail({
             paddingBottom: focusRails ? FOCUS_ROOM - 8 : 0,
           }}
           keyExtractor={(item, i) => cardKey(item, i)}
+          getItemLayout={(_, index) => ({ length: stride, offset: stride * index, index })}
+          onScrollToIndexFailed={(info) => {
+            listRef.current?.scrollToOffset({ offset: info.index * stride, animated: true });
+          }}
           ListEmptyComponent={<Text style={{ color: colors.muted, fontSize: 15 }}>Nothing here yet.</Text>}
           renderItem={({ item, index }) => (
             <PosterCard
@@ -167,7 +178,16 @@ export function MediaRail({
               showFocusRing={showFocusRing}
               borderRadius={focusRails ? 8 : showFocusRing ? 4 : 6}
               hasTVPreferredFocus={preferFirst && index === 0 ? true : undefined}
-              onFocusCard={onFocusCard}
+              onFocusCard={() => {
+                if (showFocusRing) {
+                  listRef.current?.scrollToIndex({
+                    index,
+                    animated: true,
+                    viewPosition: 0.35,
+                  });
+                }
+                onFocusCard?.();
+              }}
               onPress={() => onOpen(item)}
               onPlay={
                 onPlay && canPlayMedia(item) && item.identity.mediaType !== "tv"

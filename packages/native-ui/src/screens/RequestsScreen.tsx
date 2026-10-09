@@ -1,12 +1,18 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { listRequests } from "@streamerr/client";
+import { isTvFocused, tvFocusHighlight } from "../focus.js";
 import { ListSkeleton } from "../Skeleton.js";
 import { colors } from "../theme.js";
 import { webBg } from "../webStyle.js";
 import type { ScreenChromeProps } from "./types.js";
 
-export function RequestsScreen({ nav, header }: Pick<ScreenChromeProps, "nav" | "header">) {
+export function RequestsScreen({
+  nav,
+  header,
+  focusMode = "touch",
+}: Pick<ScreenChromeProps, "nav" | "header" | "focusMode">) {
+  const tv = focusMode === "tv";
   const query = useQuery({
     queryKey: ["requests"],
     queryFn: () => listRequests({ take: 50 }),
@@ -28,7 +34,11 @@ export function RequestsScreen({ nav, header }: Pick<ScreenChromeProps, "nav" | 
                 nav.openDetails({ type: item.mediaType, tmdbId: item.tmdbId });
               }
             }}
-            style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+            style={(state) => [
+              styles.row,
+              state.pressed && styles.rowPressed,
+              tv && isTvFocused(state) && tvFocusHighlight,
+            ]}
           >
             <Text style={styles.title}>
               {item.title}
@@ -51,8 +61,12 @@ const styles = StyleSheet.create({
   empty: { color: colors.muted },
   row: {
     paddingVertical: 14,
+    paddingHorizontal: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.bg2,
+    borderWidth: 2,
+    borderColor: "transparent",
+    borderRadius: 8,
   },
   rowPressed: { backgroundColor: colors.bg1 },
   title: { color: colors.text, fontSize: 16, fontWeight: "600" },

@@ -1012,6 +1012,7 @@ type JellyfinMediaSourceHint = {
   SupportsDirectStream?: boolean;
   SupportsTranscoding?: boolean;
   TranscodingUrl?: string | null;
+  TranscodingSubProtocol?: string | null;
   Container?: string | null;
   DefaultAudioStreamIndex?: number | null;
   MediaStreams?: Array<{
@@ -1039,27 +1040,37 @@ function resolvePlayMethodForBrowser(
 }
 
 /**
- * Native players: prefer a single progressive URL (DirectPlay / DirectStream)
- * over HLS. HLS segment auth is unreliable on AVPlayer/ExoPlayer.
- * iOS AVPlayer cannot play Matroska — remux via DirectStream (stream.mp4).
+ * Native players: DirectPlay only for AVPlayer/ExoPlayer-safe progressive files.
+ * Prefer Jellyfin HLS over DirectStream — progressive stream.mp4 remux often
+ * stalls with 0 bytes, while HLS starts reliably. Session auth is embedded in
+ * playlist/segment query strings for AVPlayer.
  */
 function resolvePlayMethodForNative(
   source: JellyfinMediaSourceHint,
 ): "DirectPlay" | "DirectStream" | "Transcode" {
   const method = resolvePlayMethod(source);
   const container = (source.Container ?? "").toLowerCase();
-  const mkv = container.includes("mkv") || container.includes("matroska");
+  const unsafeContainer =
+    container.includes("mkv") ||
+    container.includes("matroska") ||
+    container.includes("mpegts") ||
+    container === "ts" ||
+    container.includes("m2ts");
   if (
     method === "DirectPlay" &&
-    !mkv &&
+    !unsafeContainer &&
     isNativeSafeAudio(defaultAudioCodec(source))
   ) {
     return "DirectPlay";
   }
-  if (source.SupportsDirectStream) return "DirectStream";
-  if (method === "DirectStream") return "DirectStream";
-  if (source.TranscodingUrl) return "Transcode";
+  const hls =
+    source.TranscodingSubProtocol === "hls" ||
+    Boolean(source.TranscodingUrl?.includes(".m3u8"));
+  if (hls || source.TranscodingUrl) return "Transcode";
   if (source.SupportsTranscoding) return "Transcode";
+  if (source.SupportsDirectStream || method === "DirectStream") {
+    return "DirectStream";
+  }
   return "DirectStream";
 }
 
@@ -1070,54 +1081,67 @@ function isNativeSafeAudio(codec: string | undefined): boolean {
   return ["aac", "mp3", "ac3", "eac3", "flac", "alac", "opus"].includes(c);
 }
 
-/** iOS/Android profile — HEVC Main10 DirectPlay so we avoid HLS when possible. */
+/** iOS/Android profile — DirectPlay only containers the OS player can open. */
 function nativeDeviceProfile(
   kind: "ios" | "android",
   maxStreamingBitrate: number,
 ) {
-  // Broad audio list so Jellyfin does not force video transcode for DTS/TrueHD;
-  // resolvePlayMethodForNative remuxes those via DirectStream instead of HLS.
+  // Broad audio list so Jellyfin does not force video re-encode for DTS/TrueHD;
+  // unsafe containers fall through to HLS (not progressive stream.mp4).
   const videoAudio = "aac,mp3,ac3,eac3,flac,alac,opus,dts,truehd,pcm";
   const videoCodecs = "h264,hevc,mpeg4,vp9";
   const maxBitrate = clampStreamingBitrate(maxStreamingBitrate);
+  // iOS AVPlayer cannot open Matroska. Advertising mkv DirectPlay makes Jellyfin
+  // omit TranscodingUrl, then we fall back to stream.mp4 which often hangs at 0 bytes.
+  // Android ExoPlayer can DirectPlay many MKVs.
+  const directPlayContainers =
+    kind === "ios"
+      ? [
+          {
+            Container: "mp4,m4v,mov",
+            Type: "Video",
+            VideoCodec: videoCodecs,
+            AudioCodec: videoAudio,
+          },
+          {
+            Container: "hls",
+            Type: "Video",
+            VideoCodec: "h264,hevc",
+            AudioCodec: "aac,ac3,eac3",
+          },
+        ]
+      : [
+          {
+            Container: "mp4,m4v,mov",
+            Type: "Video",
+            VideoCodec: videoCodecs,
+            AudioCodec: videoAudio,
+          },
+          {
+            Container: "mkv",
+            Type: "Video",
+            VideoCodec: videoCodecs,
+            AudioCodec: videoAudio,
+          },
+          {
+            Container: "hls",
+            Type: "Video",
+            VideoCodec: "h264,hevc",
+            AudioCodec: "aac,ac3,eac3",
+          },
+        ];
   return {
     Name: kind === "ios" ? "Streamerr iOS" : "Streamerr Android",
     MaxStreamingBitrate: maxBitrate,
     MaxStaticBitrate: maxBitrate,
     MusicStreamingTranscodingBitrate: 384_000,
     DirectPlayProfiles: [
-      {
-        Container: "mp4,m4v,mov",
-        Type: "Video",
-        VideoCodec: videoCodecs,
-        AudioCodec: videoAudio,
-      },
-      {
-        Container: "mkv",
-        Type: "Video",
-        VideoCodec: videoCodecs,
-        AudioCodec: videoAudio,
-      },
-      {
-        Container: "hls",
-        Type: "Video",
-        VideoCodec: "h264,hevc",
-        AudioCodec: "aac,ac3,eac3",
-      },
+      ...directPlayContainers,
       { Container: "mp3", Type: "Audio", AudioCodec: "mp3" },
       { Container: "mp4,m4a,aac", Type: "Audio", AudioCodec: "aac" },
     ],
     TranscodingProfiles: [
-      // Prefer progressive remux over HLS — single URL auth works on AVPlayer.
-      {
-        Container: "mp4",
-        Type: "Video",
-        VideoCodec: "h264",
-        AudioCodec: "aac",
-        Protocol: "http",
-        Context: "Streaming",
-        MaxAudioChannels: "2",
-      },
+      // HLS first — progressive http remux (stream.mp4) frequently stalls.
       {
         Container: "ts",
         Type: "Video",
@@ -1128,6 +1152,15 @@ function nativeDeviceProfile(
         MaxAudioChannels: "2",
         MinSegments: 2,
         BreakOnNonKeyFrames: false,
+      },
+      {
+        Container: "mp4",
+        Type: "Video",
+        VideoCodec: "h264",
+        AudioCodec: "aac",
+        Protocol: "http",
+        Context: "Streaming",
+        MaxAudioChannels: "2",
       },
     ],
     ContainerProfiles: [],

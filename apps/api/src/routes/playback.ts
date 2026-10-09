@@ -41,6 +41,9 @@ export async function registerPlaybackRoutes(
       })
       .parse(req.body);
 
+    // Free the single IPTV connection held by Live HLS before VOD cache/play.
+    ctx.liveHls.stopAll();
+
     const result = await ctx.playbackResolver.resolve(userContext, body.identity, {
       startPositionSeconds: body.startPositionSeconds,
       audioStreamIndex: body.audioStreamIndex,

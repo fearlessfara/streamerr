@@ -84,6 +84,11 @@ export class LiveHlsManager {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    this.stopAll();
+  }
+
+  /** Drop every remux session so VOD/acquisition can take the IPTV slot. */
+  stopAll(): void {
     for (const uuid of [...this.sessions.keys()]) this.stopSession(uuid);
   }
 

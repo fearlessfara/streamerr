@@ -7,7 +7,12 @@ import Video, {
   type OnProgressData,
   type VideoRef,
 } from "react-native-video";
-import { absoluteUrl, classifyPlayback, getClient, textSubtitles } from "@streamerr/client";
+import {
+  classifyPlayback,
+  getClient,
+  playbackMediaUrl,
+  textSubtitles,
+} from "@streamerr/client";
 import type { VideoSurfaceProps } from "@streamerr/native-ui";
 
 export function NativeVideoSurface(props: VideoSurfaceProps) {
@@ -15,27 +20,48 @@ export function NativeVideoSurface(props: VideoSurfaceProps) {
   const kind = classifyPlayback(props.source);
   const origin = getClient().baseUrl || "http://localhost";
   const videoType = kind === "hls" ? "m3u8" : kind === "mpegts" ? "mpegts" : undefined;
+  const sessionId = props.headers["x-streamerr-session"];
 
   useEffect(() => {
     props.onSeekRequest?.((seconds) => ref.current?.seek(seconds));
   }, [props.onSeekRequest]);
 
-  const sideloaded = textSubtitles(props.subtitleTracks).map((track) => ({
-    title: track.label || track.language || "Subtitle",
-    language: (track.language?.slice(0, 2).toLowerCase() || "en") as "en",
-    type: track.url.endsWith(".vtt") ? TextTrackType.VTT : TextTrackType.SUBRIP,
-    uri: absoluteUrl(track.url, origin),
-  }));
+  // Streamerr subtitle proxies always return WebVTT (never .vtt in the path).
+  // Auth must be in the query string — ExoPlayer often omits headers on sideload GETs.
+  const seenTitles = new Map<string, number>();
+  const sideloaded = textSubtitles(props.subtitleTracks).map((track) => {
+    const base = (track.label || track.language || "Subtitle").trim() || "Subtitle";
+    const n = (seenTitles.get(base) ?? 0) + 1;
+    seenTitles.set(base, n);
+    const title = n > 1 ? `${base} (${n})` : base;
+    return {
+      title,
+      language: (track.language?.slice(0, 2).toLowerCase() || "en") as "en",
+      type: TextTrackType.VTT,
+      uri: playbackMediaUrl(track.url, origin, sessionId),
+    };
+  });
 
-  const selectedTextTrack =
+  const selected =
     props.subtitleIndex == null
+      ? null
+      : sideloaded[props.subtitleIndex] ?? null;
+
+  // Prefer TITLE — ExoPlayer INDEX is per-group and breaks with multiple sideloads.
+  const selectedTextTrack =
+    selected == null
       ? { type: SelectedTrackType.DISABLED }
-      : { type: SelectedTrackType.INDEX, value: props.subtitleIndex };
+      : { type: SelectedTrackType.TITLE, value: selected.title };
 
   return (
     <Video
       ref={ref}
-      source={{ uri: props.uri, headers: props.headers, type: videoType }}
+      source={{
+        uri: props.uri,
+        headers: props.headers,
+        ...(videoType ? { type: videoType } : {}),
+        textTracks: sideloaded,
+      }}
       style={StyleSheet.absoluteFill}
       paused={props.paused}
       resizeMode="contain"

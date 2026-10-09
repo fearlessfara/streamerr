@@ -826,11 +826,6 @@ export function PlayerScreen({
               {params.title ?? ""}
             </Text>
             <View style={styles.topRight}>
-              {isLive ? (
-                <View style={styles.liveBadge}>
-                  <Text style={styles.liveBadgeText}>LIVE</Text>
-                </View>
-              ) : null}
               <IconButton onPress={() => reveal(true)} label="Report a problem">
                 <NfFlagIcon size={24} />
               </IconButton>
@@ -1148,18 +1143,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   topRight: { flexDirection: "row", alignItems: "center", gap: 8 },
-  liveBadge: {
-    backgroundColor: colors.accent,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 2,
-  },
-  liveBadgeText: {
-    color: "#fff",
-    fontSize: 11,
-    fontWeight: "800",
-    letterSpacing: 0.8,
-  },
   bottom: {
     paddingTop: 12,
     pointerEvents: "box-none",

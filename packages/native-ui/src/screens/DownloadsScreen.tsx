@@ -7,12 +7,18 @@ import {
   promoteAcquisition,
 } from "@streamerr/client";
 import { Button } from "../Button.js";
+import { isTvFocused, tvFocusHighlight } from "../focus.js";
 import { ListSkeleton } from "../Skeleton.js";
 import { colors } from "../theme.js";
 import { webBg } from "../webStyle.js";
 import type { ScreenChromeProps } from "./types.js";
 
-export function DownloadsScreen({ nav, header }: Pick<ScreenChromeProps, "nav" | "header">) {
+export function DownloadsScreen({
+  nav,
+  header,
+  focusMode = "touch",
+}: Pick<ScreenChromeProps, "nav" | "header" | "focusMode">) {
+  const tv = focusMode === "tv";
   const qc = useQueryClient();
   const query = useQuery({
     queryKey: ["acquisitions"],
@@ -60,7 +66,11 @@ export function DownloadsScreen({ nav, header }: Pick<ScreenChromeProps, "nav" |
                   nav.openDetails({ jellyfinItemId: id.jellyfinItemId });
                 }
               }}
-              style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+              style={(state) => [
+                styles.row,
+                state.pressed && styles.rowPressed,
+                tv && isTvFocused(state) && tvFocusHighlight,
+              ]}
             >
               <View style={styles.rowBody}>
                 <Text style={styles.title} numberOfLines={1}>
@@ -72,9 +82,19 @@ export function DownloadsScreen({ nav, header }: Pick<ScreenChromeProps, "nav" |
                 </Text>
               </View>
               {item.state === "completed" ? (
-                <Button label="Library" variant="ghost" onPress={() => promote.mutate(item.id)} />
+                <Button
+                  label="Library"
+                  variant="ghost"
+                  onPress={() => promote.mutate(item.id)}
+                  showFocusRing={tv}
+                />
               ) : item.state === "downloading" || item.state === "queued" ? (
-                <Button label="Cancel" variant="ghost" onPress={() => cancel.mutate(item.id)} />
+                <Button
+                  label="Cancel"
+                  variant="ghost"
+                  onPress={() => cancel.mutate(item.id)}
+                  showFocusRing={tv}
+                />
               ) : null}
             </Pressable>
           );
@@ -92,9 +112,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 12,
+    paddingHorizontal: 8,
     gap: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.bg2,
+    borderWidth: 2,
+    borderColor: "transparent",
+    borderRadius: 8,
   },
   rowPressed: { backgroundColor: colors.bg1 },
   rowBody: { flex: 1 },

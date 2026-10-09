@@ -7,7 +7,7 @@ export function DownloadsScreen({ username }: { username: string }) {
   const nav = useScreenNav();
   return (
     <Chrome username={username}>
-      <SharedDownloads nav={nav} header={<PageHeading title="Downloads" />} />
+      <SharedDownloads nav={nav} header={<PageHeading title="Downloads" />} focusMode="tv" />
     </Chrome>
   );
 }

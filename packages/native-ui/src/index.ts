@@ -17,7 +17,13 @@ export { PosterCard, type PosterCardProps } from "./PosterCard.js";
 export { HScroll } from "./HScroll.js";
 export { Button, PillButton } from "./Button.js";
 export { PlayIcon, DownloadIcon, ChevronDownIcon } from "./icons.js";
-export { isTvFocused, type TvPressState } from "./focus.js";
+export {
+  isTvFocused,
+  tvFocusFill,
+  tvFocusRingOnLight,
+  tvFocusHighlight,
+  type TvPressState,
+} from "./focus.js";
 export {
   SERVER_URL_KEY,
   SESSION_KEY,

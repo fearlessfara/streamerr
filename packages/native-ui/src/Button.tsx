@@ -8,7 +8,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from "react-native";
-import { isTvFocused } from "./focus.js";
+import { isTvFocused, tvFocusFill, tvFocusRingOnLight } from "./focus.js";
 import { PlayIcon } from "./icons.js";
 import { colors } from "./theme.js";
 
@@ -30,31 +30,41 @@ export function Button({
   return (
     <Pressable
       {...rest}
-      style={(state) => [
-        styles.base,
-        variant === "primary" && styles.primary,
-        variant === "ghost" && styles.ghost,
-        variant === "danger" && styles.danger,
-        variant === "accent" && styles.accent,
-        state.pressed && styles.pressed,
-        showFocusRing && isTvFocused(state) ? [styles.focused, focusedStyle] : null,
-        typeof style === "function" ? style(state) : style,
-      ]}
+      style={(state) => {
+        const focused = showFocusRing && isTvFocused(state);
+        // Primary is already a light fill — use a dark ring so focus is visible.
+        const focusChrome =
+          variant === "primary" ? tvFocusRingOnLight : tvFocusFill;
+        return [
+          styles.base,
+          variant === "primary" && styles.primary,
+          variant === "ghost" && styles.ghost,
+          variant === "danger" && styles.danger,
+          variant === "accent" && styles.accent,
+          state.pressed && styles.pressed,
+          focused ? [focusChrome, focusedStyle] : null,
+          typeof style === "function" ? style(state) : style,
+        ];
+      }}
     >
-      {(state) => (
-        <Text
-          style={[
-            styles.label,
-            variant === "primary" && styles.labelOnPrimary,
-            variant === "ghost" && styles.labelGhost,
-            variant === "danger" && styles.labelOnPrimary,
-            variant === "accent" && styles.labelOnAccent,
-            showFocusRing && isTvFocused(state) ? styles.labelFocused : null,
-          ]}
-        >
-          {label}
-        </Text>
-      )}
+      {(state) => {
+        const focused = showFocusRing && isTvFocused(state);
+        const invertLabel = focused && variant !== "primary";
+        return (
+          <Text
+            style={[
+              styles.label,
+              variant === "primary" && styles.labelOnPrimary,
+              variant === "ghost" && styles.labelGhost,
+              variant === "danger" && styles.labelOnPrimary,
+              variant === "accent" && styles.labelOnAccent,
+              invertLabel ? styles.labelFocused : null,
+            ]}
+          >
+            {label}
+          </Text>
+        );
+      }}
     </Pressable>
   );
 }
@@ -75,10 +85,6 @@ const styles = StyleSheet.create({
   danger: { backgroundColor: colors.danger },
   accent: { backgroundColor: colors.accent, borderRadius: 4 },
   pressed: { opacity: 0.85 },
-  focused: {
-    backgroundColor: colors.text,
-    borderColor: colors.text,
-  },
   label: { fontSize: 15, fontWeight: "700" },
   labelOnPrimary: { color: colors.bg },
   labelOnAccent: { color: "#fff" },
@@ -159,8 +165,8 @@ const pillStyles = StyleSheet.create({
   glass: { backgroundColor: "rgba(128, 128, 128, 0.4)" },
   focused: {
     backgroundColor: "#fff",
-    borderColor: "#fff",
-    transform: [{ scale: 1.06 }],
+    borderColor: "#000",
+    transform: [{ scale: 1.08 }],
   },
   label: { fontSize: 16, fontWeight: "500" },
   info: {
