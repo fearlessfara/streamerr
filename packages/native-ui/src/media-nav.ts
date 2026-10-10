@@ -31,9 +31,30 @@ export type MediaNavigator = {
   navigate: (name: "Details", params: DetailsParams) => void;
 };
 
+/** Strip "S1E2" suffix from Jellyfin-style episode titles for series seeds. */
+function seriesTitleFromEpisode(title: string): string {
+  const m = /^(.*?)\s+S\d+E\d+/i.exec(title);
+  return m?.[1]?.trim() || title;
+}
+
 export function detailsSeedFromMedia(media: Media): DetailsMediaSeed | undefined {
   const { tmdbId, mediaType } = media.identity;
-  if (!tmdbId || (mediaType !== "movie" && mediaType !== "tv")) return undefined;
+  if (!tmdbId) return undefined;
+  // Episodes open the series details page (Netflix jawbone) — seed as tv.
+  if (mediaType === "episode") {
+    return {
+      title: seriesTitleFromEpisode(media.metadata.title),
+      posterUrl: media.metadata.posterUrl,
+      backdropUrl: media.metadata.backdropUrl,
+      year: media.metadata.year,
+      overview: media.metadata.overview,
+      runtimeMinutes: media.metadata.runtimeMinutes,
+      mediaType: "tv",
+      tmdbId,
+      preferredAction: media.preferredAction,
+    };
+  }
+  if (mediaType !== "movie" && mediaType !== "tv") return undefined;
   return {
     title: media.metadata.title,
     posterUrl: media.metadata.posterUrl,
@@ -64,7 +85,29 @@ export function mediaFromDetailsSeed(seed: DetailsMediaSeed): Media {
 }
 
 export function openMedia(navigation: MediaNavigator, media: Media) {
-  const { jellyfinItemId, tmdbId, mediaType } = media.identity;
+  const { jellyfinItemId, jellyfinSeriesId, tmdbId, mediaType } = media.identity;
+
+  // Netflix: episode / Continue Watching cards open series details, not the player.
+  // Prefer the series Jellyfin id — episode ProviderIds.Tmdb is often the episode id.
+  if (mediaType === "episode") {
+    if (jellyfinSeriesId) {
+      navigation.navigate("Details", { jellyfinItemId: jellyfinSeriesId });
+      return;
+    }
+    if (tmdbId) {
+      navigation.navigate("Details", {
+        type: "tv",
+        tmdbId,
+        seed: detailsSeedFromMedia(media),
+      });
+      return;
+    }
+    if (jellyfinItemId) {
+      navigation.navigate("Details", { jellyfinItemId });
+    }
+    return;
+  }
+
   if (tmdbId && (mediaType === "movie" || mediaType === "tv")) {
     navigation.navigate("Details", {
       type: mediaType,

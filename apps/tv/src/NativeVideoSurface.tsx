@@ -18,7 +18,7 @@ import type { VideoSurfaceProps } from "@streamerr/native-ui";
 export function NativeVideoSurface(props: VideoSurfaceProps) {
   const ref = useRef<VideoRef>(null);
   const kind = classifyPlayback(props.source);
-  const origin = getClient().baseUrl || "http://localhost";
+  const origin = getClient().baseUrl || "http://localhost:8787";
   const videoType = kind === "hls" ? "m3u8" : kind === "mpegts" ? "mpegts" : undefined;
   const sessionId = props.headers["x-streamerr-session"];
 
@@ -72,7 +72,6 @@ export function NativeVideoSurface(props: VideoSurfaceProps) {
       onProgress={(data: OnProgressData) => props.onProgress({ currentTime: data.currentTime })}
       onEnd={props.onEnd}
       onError={(e) => props.onError(e.error?.errorString ?? "Playback failed")}
-      textTracks={sideloaded}
       selectedTextTrack={selectedTextTrack}
       reportBandwidth
       ignoreSilentSwitch="ignore"

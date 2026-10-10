@@ -354,7 +354,7 @@ export function PosterCard({
         }}
       >
         {rank != null ? (
-          <View style={styles.rankBadge} pointerEvents="none">
+          <View style={styles.rankBadge}>
             <Text style={styles.rankText}>{rank}</Text>
           </View>
         ) : null}
@@ -629,6 +629,7 @@ const styles = StyleSheet.create({
     zIndex: 2,
     minWidth: 36,
     paddingHorizontal: 4,
+    pointerEvents: "none",
   },
   rankText: {
     color: "#fff",

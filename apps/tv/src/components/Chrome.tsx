@@ -63,9 +63,8 @@ export function Chrome({
     // Transparent Details keeps this screen mounted — disable the whole subtree
     // so D-pad cannot move selection on Home/Catalog behind the modal.
     <TVFocusGuideView
-      style={styles.shell}
+      style={[styles.shell, { pointerEvents: canFocus ? "auto" : "none" }]}
       focusable={canFocus}
-      pointerEvents={canFocus ? "auto" : "none"}
     >
       {menuOpen ? (
         <Pressable style={styles.dismiss} onPress={() => setMenuOpen(false)} />

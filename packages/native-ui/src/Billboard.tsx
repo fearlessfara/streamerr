@@ -95,7 +95,7 @@ export function Billboard({
     >
       <Artwork url={art} maxWidth={1600} style={styles.image} />
       {canPreview && trailerOn && embedSrc ? (
-        <View style={styles.trailer} pointerEvents="none">
+        <View style={styles.trailer}>
           {createElement("iframe", {
             title: `${media.metadata.title} trailer`,
             src: embedSrc,
@@ -163,6 +163,7 @@ const styles = StyleSheet.create({
   trailer: {
     ...StyleSheet.absoluteFill,
     zIndex: 1,
+    pointerEvents: "none",
   },
   copy: { paddingBottom: 64, maxWidth: 640, zIndex: 2 },
   title: {

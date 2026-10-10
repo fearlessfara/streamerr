@@ -40,7 +40,12 @@ import { NfBackIcon } from "../player/PlayerIcons.js";
 import { DetailsSkeleton } from "../Skeleton.js";
 import { colors } from "../theme.js";
 import type { NativeLayout } from "../layout.js";
-import { mediaFromDetailsSeed, openMedia, type DetailsParams } from "../media-nav.js";
+import {
+  detailsSeedFromMedia,
+  mediaFromDetailsSeed,
+  openMedia,
+  type DetailsParams,
+} from "../media-nav.js";
 import { Shade } from "../Shade.js";
 import type { Appearance, ScreenNav } from "./types.js";
 
@@ -367,19 +372,37 @@ export function DetailsScreen({
     !availabilityQuery.isError;
 
   const cache = media?.availability.find((a) => a.provider === "cache");
+  const isEpisode = media?.identity.mediaType === "episode";
   const isTv =
-    media?.identity.mediaType === "tv" || type === "tv" || seed?.mediaType === "tv";
+    media?.identity.mediaType === "tv" || isEpisode || type === "tv" || seed?.mediaType === "tv";
   const seriesTmdbId = media?.identity.tmdbId ?? tmdbId ?? seed?.tmdbId;
   const [season, setSeason] = useState<number | null>(null);
   const [bufferStatus, setBufferStatus] = useState<string | null>(null);
   const tv = focusMode === "tv";
   const web = appearance === "web" && layout != null;
 
+  // Netflix jawbone: never stay on an episode details page — promote to series.
+  useEffect(() => {
+    if (!media || media.identity.mediaType !== "episode") return;
+    const seriesId = media.identity.jellyfinSeriesId;
+    if (seriesId && seriesId !== jellyfinItemId) {
+      nav.openDetails({ jellyfinItemId: seriesId });
+      return;
+    }
+    if (media.identity.tmdbId != null && type !== "tv") {
+      nav.openDetails({
+        type: "tv",
+        tmdbId: media.identity.tmdbId,
+        seed: detailsSeedFromMedia(media),
+      });
+    }
+  }, [media, jellyfinItemId, type, nav]);
+
   // Load the guide as soon as we know it's a series — don't wait on IPTV resolve.
   const episodesQuery = useQuery({
     queryKey: ["media", "tv", seriesTmdbId, "episodes"],
     queryFn: () => seriesEpisodes(seriesTmdbId!),
-    enabled: Boolean(isTv && seriesTmdbId),
+    enabled: Boolean(isTv && seriesTmdbId && !isEpisode),
   });
 
   const similarType: "movie" | "tv" | null =
@@ -930,10 +953,21 @@ export function DetailsScreen({
                       {media.metadata.tagline ? (
                         <Text style={styles.webTagline}>{media.metadata.tagline}</Text>
                       ) : null}
+                      {/* Netflix: Resume stays plain; S1:E2 "Title" sits under the meta. */}
+                      {resumeEpisode ? (
+                        <Text style={styles.webResumeEp}>
+                          <Text style={styles.webResumeEpCode}>
+                            {`S${resumeEpisode.seasonNumber}:E${resumeEpisode.episodeNumber}`}
+                          </Text>
+                          {resumeEpisode.title ? (
+                            <Text style={styles.webResumeEpTitle}>{` "${resumeEpisode.title}"`}</Text>
+                          ) : null}
+                        </Text>
+                      ) : null}
                       {/* Movies put the synopsis on the episode-style row below (Netflix). */}
-                      {isTv && media.metadata.overview ? (
+                      {isTv && (resumeEpisode?.overview || media.metadata.overview) ? (
                         <Text style={styles.webOverview} numberOfLines={4}>
-                          {media.metadata.overview}
+                          {resumeEpisode?.overview || media.metadata.overview}
                         </Text>
                       ) : null}
                       {bufferStatus ? <Text style={styles.buffer}>{bufferStatus}</Text> : null}
@@ -1111,8 +1145,20 @@ export function DetailsScreen({
                 />
               ) : null}
             </View>
-            {media.metadata.overview ? (
-              <Text style={styles.overview}>{media.metadata.overview}</Text>
+            {resumeEpisode ? (
+              <Text style={styles.resumeEp}>
+                <Text style={styles.resumeEpCode}>
+                  {`S${resumeEpisode.seasonNumber}:E${resumeEpisode.episodeNumber}`}
+                </Text>
+                {resumeEpisode.title ? (
+                  <Text style={styles.resumeEpTitle}>{` "${resumeEpisode.title}"`}</Text>
+                ) : null}
+              </Text>
+            ) : null}
+            {(resumeEpisode?.overview || media.metadata.overview) ? (
+              <Text style={styles.overview}>
+                {resumeEpisode?.overview || media.metadata.overview}
+              </Text>
             ) : null}
             <MediaFacts
               media={media}
@@ -1176,6 +1222,9 @@ const styles = StyleSheet.create({
   backdrop: { height: 220, borderRadius: 8, opacity: 0.85, width: "100%" },
   title: { color: colors.text, fontSize: 28, fontWeight: "800" },
   meta: { color: colors.muted, marginTop: 8, fontSize: 15 },
+  resumeEp: { color: colors.text, fontSize: 15, lineHeight: 22, marginTop: 12 },
+  resumeEpCode: { color: colors.text, fontWeight: "700" },
+  resumeEpTitle: { color: colors.text, fontWeight: "400" },
   tagline: {
     color: colors.muted,
     fontSize: 14,
@@ -1280,6 +1329,9 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
     marginTop: 8,
   },
+  webResumeEp: { color: "#fff", fontSize: 15, lineHeight: 22, marginTop: 12 },
+  webResumeEpCode: { color: "#fff", fontWeight: "700" },
+  webResumeEpTitle: { color: "#fff", fontWeight: "400" },
   webOverview: { color: "#fff", fontSize: 15, lineHeight: 22, marginTop: 10 },
   webFact: { color: "#fff", fontSize: 13, lineHeight: 19 },
   webFactLabel: { color: "#777" },

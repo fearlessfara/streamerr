@@ -40,6 +40,7 @@ import { colors } from "../theme.js";
 import type { LiveChannelRef } from "../screens/types.js";
 import type { VideoSurfaceProps, VideoTransport } from "./VideoSurfaceProps.js";
 import {
+  NfAirPlayIcon,
   NfAudioSubsIcon,
   NfBackIcon,
   NfEpisodesIcon,
@@ -155,6 +156,8 @@ export function PlayerScreen({
   const [muted, setMuted] = useState(false);
   const [rate, setRate] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
+  const [airPlayAvailable, setAirPlayAvailable] = useState(false);
+  const [airPlayActive, setAirPlayActive] = useState(false);
   const [headers, setHeaders] = useState<Record<string, string> | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   /** Hover preview time (seconds) over the scrub bar — web pointer only. */
@@ -254,6 +257,15 @@ export function PlayerScreen({
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
+  const airPlayUnsub = useRef<(() => void) | null>(null);
+  useEffect(
+    () => () => {
+      airPlayUnsub.current?.();
+      airPlayUnsub.current = null;
+    },
+    [],
+  );
+
   useEffect(() => {
     setSource(params.source);
     setSubtitleTracks(params.source.subtitles ?? []);
@@ -331,7 +343,12 @@ export function PlayerScreen({
     };
   }, [client, userAgent]);
 
-  const origin = client.baseUrl || "http://localhost";
+  // Web uses an empty baseUrl (same-origin / Metro /api proxy). Never fall back
+  // to bare http://localhost — that hits port 80 and ERR_CONNECTION_REFUSED.
+  const origin =
+    client.baseUrl ||
+    (typeof window !== "undefined" ? window.location.origin : "") ||
+    "http://localhost:8787";
   const uri = playbackMediaUrl(source.delivery.url, origin, sessionId);
   // Prefer a finite player-reported duration; fall back to catalogue metadata.
   // MSE/HLS sometimes reports Infinity — that must not wipe the scrubber.
@@ -510,6 +527,11 @@ export function PlayerScreen({
     if (t.isFullscreen()) await t.exitFullscreen();
     else await t.requestFullscreen();
     setFullscreen(t.isFullscreen());
+    reveal();
+  }, [reveal]);
+
+  const openAirPlay = useCallback(() => {
+    transportRef.current?.showAirPlayPicker?.();
     reveal();
   }, [reveal]);
 
@@ -784,12 +806,20 @@ export function PlayerScreen({
             transportRef.current = t;
             t.setMuted(muted);
             t.setRate(rate);
+            airPlayUnsub.current?.();
+            setAirPlayAvailable(Boolean(t.isAirPlayAvailable?.()));
+            setAirPlayActive(Boolean(t.isAirPlayActive?.()));
+            airPlayUnsub.current =
+              t.onAirPlayChange?.(() => {
+                setAirPlayAvailable(Boolean(t.isAirPlayAvailable?.()));
+                setAirPlayActive(Boolean(t.isAirPlayActive?.()));
+              }) ?? null;
           }}
         />
       ) : null}
 
       {!headers ? (
-        <View style={styles.loadingBox} pointerEvents="none">
+        <View style={styles.loadingBox}>
           <Text style={styles.loadingText}>Loading stream…</Text>
         </View>
       ) : null}
@@ -800,7 +830,6 @@ export function PlayerScreen({
           styles.alwaysBack,
           { paddingTop: 8 + insetTop, paddingLeft: 8 + insetLeft },
         ]}
-        pointerEvents="box-none"
       >
         <IconButton onPress={onClose} label="Back" large>
           <NfBackIcon size={32} />
@@ -808,9 +837,9 @@ export function PlayerScreen({
       </View>
 
       {controls && !error ? (
-        <View style={styles.chrome} pointerEvents="box-none">
-          <View style={styles.topGradient} pointerEvents="none" />
-          <View style={styles.bottomGradient} pointerEvents="none" />
+        <View style={styles.chrome}>
+          <View style={styles.topGradient} />
+          <View style={styles.bottomGradient} />
 
           <View
             style={[
@@ -832,7 +861,7 @@ export function PlayerScreen({
             </View>
           </View>
 
-          <View style={styles.centerPlay} pointerEvents="box-none">
+          <View style={styles.centerPlay}>
             <IconButton onPress={togglePause} label={paused ? "Play" : "Pause"} large>
               <View style={styles.centerPlayHit}>
                 {paused ? <NfPlayIcon size={40} /> : <NfPauseIcon size={40} />}
@@ -955,6 +984,14 @@ export function PlayerScreen({
                 >
                   <NfSpeedIcon size={28} />
                 </IconButton>
+                {Platform.OS === "web" && airPlayAvailable ? (
+                  <IconButton
+                    onPress={openAirPlay}
+                    label={airPlayActive ? "AirPlay active" : "AirPlay"}
+                  >
+                    <NfAirPlayIcon size={26} color={airPlayActive ? colors.accent : "#fff"} />
+                  </IconButton>
+                ) : null}
                 {Platform.OS === "web" ? (
                   <IconButton
                     onPress={() => void toggleFullscreen()}
@@ -1093,6 +1130,7 @@ const styles = StyleSheet.create({
     right: 0,
     height: 120,
     backgroundColor: "rgba(0,0,0,0.55)",
+    pointerEvents: "none",
   },
   bottomGradient: {
     position: "absolute",
@@ -1101,18 +1139,21 @@ const styles = StyleSheet.create({
     right: 0,
     height: 160,
     backgroundColor: "rgba(0,0,0,0.65)",
+    pointerEvents: "none",
   },
   alwaysBack: {
     position: "absolute",
     top: 0,
     left: 0,
     zIndex: 8,
+    pointerEvents: "box-none",
   },
   centerPlay: {
     ...StyleSheet.absoluteFill,
     alignItems: "center",
     justifyContent: "center",
     zIndex: 6,
+    pointerEvents: "box-none",
   },
   centerPlayHit: {
     width: 80,
@@ -1300,6 +1341,7 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFill,
     alignItems: "center",
     justifyContent: "center",
+    pointerEvents: "none",
   },
   loadingText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   errorBox: {

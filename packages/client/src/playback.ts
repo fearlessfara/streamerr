@@ -26,7 +26,11 @@ export function classifyPlayback(source: PlaybackSource): PlaybackKind {
 
 export function absoluteUrl(url: string, origin: string): string {
   try {
-    return new URL(url, origin || "http://localhost").href;
+    const base =
+      origin ||
+      (typeof window !== "undefined" ? window.location.origin : "") ||
+      "http://localhost:8787";
+    return new URL(url, base).href;
   } catch {
     return url;
   }

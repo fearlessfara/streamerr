@@ -19,6 +19,7 @@ export function attachWebPlayback(
   let destroyed = false;
   let hls: Hls | null = null;
   let mpeg: mpegts.Player | null = null;
+  let extraCleanup: (() => void) | null = null;
 
   const kind = classifyPlayback(source);
   const url = source.delivery.url;
@@ -52,6 +53,9 @@ export function attachWebPlayback(
   video.addEventListener("ended", onEnded);
   video.addEventListener("error", onVidError);
 
+  // Prefer Safari native HLS so AirPlay can route the playlist URL (MSE cannot).
+  const nativeHls = kind === "hls" && Boolean(video.canPlayType("application/vnd.apple.mpegurl"));
+
   if (kind === "mpegts" && mpegts.getFeatureList().mseLivePlayback) {
     mpeg = mpegts.createPlayer(
       { type: "mse", isLive: true, url },
@@ -62,6 +66,8 @@ export function attachWebPlayback(
     mpeg.on(mpegts.Events.ERROR, (_t: string, _d: unknown, info: { msg?: string }) => {
       onError(info?.msg ?? "Live stream error");
     });
+  } else if (nativeHls) {
+    video.src = url;
   } else if (kind === "hls" && Hls.isSupported()) {
     const resumeAt = startPosition && startPosition > 30 ? startPosition : -1;
     hls = new Hls({
@@ -76,6 +82,25 @@ export function attachWebPlayback(
     });
     hls.loadSource(url);
     hls.attachMedia(video);
+    // AirPlay needs a real HLS URL; Safari switches to this <source> when casting.
+    // https://webkit.org/blog/15036/how-to-use-media-source-extensions-with-airplay/
+    const airplaySource = document.createElement("source");
+    airplaySource.type = "application/x-mpegURL";
+    airplaySource.src = url;
+    video.appendChild(airplaySource);
+    const onWireless = () => {
+      const wireless = Boolean(
+        (video as HTMLVideoElement & { webkitCurrentPlaybackTargetIsWireless?: boolean })
+          .webkitCurrentPlaybackTargetIsWireless,
+      );
+      if (wireless) hls?.stopLoad();
+      else hls?.startLoad();
+    };
+    video.addEventListener("webkitcurrentplaybacktargetiswirelesschanged", onWireless);
+    extraCleanup = () => {
+      video.removeEventListener("webkitcurrentplaybacktargetiswirelesschanged", onWireless);
+      airplaySource.remove();
+    };
     // Reinforce resume after the manifest is ready — startPosition alone can
     // lose a race on some remux/transcode playlists.
     if (resumeAt > 30) {
@@ -137,6 +162,8 @@ export function attachWebPlayback(
       video.removeEventListener("loadedmetadata", onLoaded);
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("error", onVidError);
+      extraCleanup?.();
+      extraCleanup = null;
       hls?.destroy();
       hls = null;
       if (mpeg) {
@@ -144,6 +171,7 @@ export function attachWebPlayback(
         mpeg = null;
       }
       video.removeAttribute("src");
+      while (video.firstChild) video.removeChild(video.firstChild);
       video.load();
     },
     getPosition: () => video.currentTime,

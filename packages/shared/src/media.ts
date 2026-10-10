@@ -73,9 +73,15 @@ export type CacheAvailability = z.infer<typeof CacheAvailabilitySchema>;
 export const DispatcharrStreamCandidateSchema = z.object({
   streamId: z.string().optional(),
   m3uAccountId: z.number().optional(),
+  /** Usually provider category name (e.g. "EN - DRAMA") — used for language ranking. */
   label: z.string().optional(),
-  /** Catalogue/audio language inferred from label or account name (en, it, …). */
+  /** Catalogue/audio language inferred from category / title prefix (en, it, …). */
   catalogueLanguage: z.string().optional(),
+  /** Raw quality_info.quality when present (often "4K"). */
+  qualityLabel: z.string().optional(),
+  /** Approximate vertical resolution (2160 for 4K). */
+  resolutionHeight: z.number().int().positive().optional(),
+  hdr: z.boolean().optional(),
 });
 export type DispatcharrStreamCandidate = z.infer<typeof DispatcharrStreamCandidateSchema>;
 

@@ -15,7 +15,7 @@ import { textSubtitles } from "@streamerr/client";
 export function NativeVideoSurface(props: VideoSurfaceProps) {
   const ref = useRef<VideoRef>(null);
   const kind = classifyPlayback(props.source);
-  const origin = getClient().baseUrl || "http://localhost";
+  const origin = getClient().baseUrl || "http://localhost:8787";
   const videoType = kind === "hls" ? "m3u8" : kind === "mpegts" ? "mpegts" : undefined;
 
   useEffect(() => {
@@ -65,6 +65,7 @@ export function NativeVideoSurface(props: VideoSurfaceProps) {
         uri: props.uri,
         ...(sourceHeaders ? { headers: sourceHeaders } : {}),
         ...(videoType ? { type: videoType } : {}),
+        textTracks: sideloaded,
       }}
       style={StyleSheet.absoluteFill}
       paused={props.paused}
@@ -100,7 +101,6 @@ export function NativeVideoSurface(props: VideoSurfaceProps) {
         console.error("[NativeVideoSurface]", kind, where, detail, err);
         props.onError(`${detail} (${kind} @ ${where})`);
       }}
-      textTracks={sideloaded}
       selectedTextTrack={selectedTextTrack}
       reportBandwidth
       ignoreSilentSwitch="ignore"

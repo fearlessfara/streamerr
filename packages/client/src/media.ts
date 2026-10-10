@@ -1,7 +1,18 @@
 import type { Media } from "@streamerr/shared";
 
 export function mediaHref(media: Media): string | null {
-  const { jellyfinItemId, tmdbId, mediaType } = media.identity;
+  const { jellyfinItemId, jellyfinSeriesId, tmdbId, mediaType } = media.identity;
+  // Netflix-style: episode cards link to the series details page.
+  if (mediaType === "episode") {
+    if (jellyfinSeriesId) {
+      return `/media/jellyfin/${encodeURIComponent(jellyfinSeriesId)}`;
+    }
+    if (tmdbId) return `/media/tv/${tmdbId}`;
+    if (jellyfinItemId) {
+      return `/media/jellyfin/${encodeURIComponent(jellyfinItemId)}`;
+    }
+    return null;
+  }
   if (tmdbId && (mediaType === "movie" || mediaType === "tv")) {
     return `/media/${mediaType}/${tmdbId}`;
   }

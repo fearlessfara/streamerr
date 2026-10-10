@@ -4,8 +4,11 @@ import {
   normalizeLanguageTag,
   parseCatalogueLanguageHints,
   parsePreferredLanguages,
+  parseQualityHints,
   pickPreferredByCatalogueLanguage,
+  rankDispatcharrStreamCandidates,
   scoreLanguagePreference,
+  scoreQualityPreference,
 } from "./iptv-language.js";
 
 describe("normalizeLanguageTag", () => {
@@ -35,6 +38,30 @@ describe("parseCatalogueLanguageHints", () => {
     const svc = parseCatalogueLanguageHints({ name: "4K-D+ - Zootopia" });
     expect(svc.platform).toBe("dplus");
     expect(svc.language).toBeUndefined();
+    expect(svc.qualityHeight).toBe(2160);
+  });
+
+  it("parses compound 4K-EN / 4K-FR-HDR / 3D-DE / AF-EN prefixes", () => {
+    const en4k = parseCatalogueLanguageHints({ name: "4K-EN - Books of Blood (2020)" });
+    expect(en4k.language).toBe("en");
+    expect(en4k.qualityHeight).toBe(2160);
+
+    const frHdr = parseCatalogueLanguageHints({ name: "4K-FR-HDR - L'Enfant Du Désert" });
+    expect(frHdr.language).toBe("fr");
+    expect(frHdr.qualityHeight).toBe(2160);
+    expect(frHdr.hdr).toBe(true);
+
+    const de3d = parseCatalogueLanguageHints({ name: "3D-DE - Alles fliegt dir um die Ohren" });
+    expect(de3d.language).toBe("de");
+
+    const afEn = parseCatalogueLanguageHints({ name: "AF-EN - Flipped" });
+    expect(afEn.language).toBe("en");
+  });
+
+  it("treats NF - Fight Club as service-only (no language)", () => {
+    const hints = parseCatalogueLanguageHints({ name: "NF - Fight Club" });
+    expect(hints.language).toBeUndefined();
+    expect(hints.platform).toBe("netflix");
   });
 
   it("inherits language from group when name is service-only", () => {
@@ -44,6 +71,20 @@ describe("parseCatalogueLanguageHints", () => {
     });
     expect(hints.platform).toBe("dplus");
     expect(hints.language).toBe("de");
+  });
+});
+
+describe("scoreQualityPreference", () => {
+  it("scores 4K above unknown", () => {
+    expect(scoreQualityPreference({ quality: "4K" })).toBeGreaterThan(
+      scoreQualityPreference({ label: "EN - DRAMA" }),
+    );
+    expect(scoreQualityPreference({ quality: "4K" })).toBe(2160);
+    expect(scoreQualityPreference({})).toBe(0);
+  });
+
+  it("parses quality from free text", () => {
+    expect(parseQualityHints("NORDIC FILM ⁴ᴷ ³⁸⁴⁰ᴾ").height).toBe(2160);
   });
 });
 
@@ -151,6 +192,58 @@ describe("pickPreferredByCatalogueLanguage", () => {
     });
     expect(best?.item.name).toBe("NF - Zootopia");
     expect(best?.score).toBe(0);
+  });
+
+  it("prefers 4K-EN over EN when language matches", () => {
+    const rows = [
+      { id: 1, name: "EN - Punchdrunk: Behind the Mask (2023)" },
+      { id: 2, name: "4K-EN - Books of Blood (2020)" },
+      { id: 3, name: "NF - Fight Club" },
+    ];
+    const best = pickPreferredByCatalogueLanguage(rows, ["en"], {
+      nameOf: (i) => i.name,
+      idOf: (i) => i.id,
+    });
+    expect(best?.item.name).toBe("4K-EN - Books of Blood (2020)");
+    expect(best?.qualityHeight).toBe(2160);
+  });
+});
+
+describe("rankDispatcharrStreamCandidates", () => {
+  it("prefers EN category over DE / IR when preferred is en (Fight Club-like)", () => {
+    const ranked = rankDispatcharrStreamCandidates(
+      [
+        { streamId: "de", label: "DE - FILME 1940/2024" },
+        { streamId: "en", label: "EN - IMDB TOP 250" },
+        { streamId: "ir", label: "IR - PERSIAN SUB/DUB" },
+        { streamId: "nf", label: "NETFLIX MOVIES" },
+      ],
+      ["en"],
+    );
+    expect(ranked[0]?.streamId).toBe("en");
+    expect(ranked[0]?.catalogueLanguage).toBe("en");
+  });
+
+  it("among EN categories, prefers quality 4K over empty", () => {
+    const ranked = rankDispatcharrStreamCandidates(
+      [
+        { streamId: "sd", label: "EN - DRAMA", qualityLabel: undefined },
+        { streamId: "uhd", label: "EN - DRAMA", qualityLabel: "4K" },
+      ],
+      ["en"],
+    );
+    expect(ranked[0]?.streamId).toBe("uhd");
+  });
+
+  it("never lets non-preferred 4K beat preferred language", () => {
+    const ranked = rankDispatcharrStreamCandidates(
+      [
+        { streamId: "it4k", label: "IT - 4K MOVIES", qualityLabel: "4K" },
+        { streamId: "en720", label: "EN - DRAMA" },
+      ],
+      ["en"],
+    );
+    expect(ranked[0]?.streamId).toBe("en720");
   });
 });
 

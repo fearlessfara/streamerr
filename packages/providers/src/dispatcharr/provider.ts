@@ -12,9 +12,10 @@ import type {
 import {
   parseCatalogueLanguageHints,
   parsePreferredLanguages,
+  parseQualityHints,
   pickPreferredByCatalogueLanguage,
   ProviderError,
-  scoreLanguagePreference,
+  rankDispatcharrStreamCandidates,
 } from "@streamerr/shared";
 import { HttpClient } from "../http.js";
 import type { AcquisitionSourceProvider, LiveTvProvider, VodProvider } from "../types.js";
@@ -773,22 +774,30 @@ export class DispatcharrProvider implements VodProvider, LiveTvProvider, Acquisi
       const providersParsed = ProvidersSchema.safeParse(providersSettled.value.data);
       if (providersParsed.success && providersParsed.data.length > 0) {
         const providers = providersParsed.data;
+        const titleHints = parseCatalogueLanguageHints({ name: movie.name });
         candidates = this.rankStreamCandidates(
           providers.map((p) => {
-            const label =
-              p.quality_info?.quality ||
-              p.quality_info?.resolution ||
-              p.m3u_account?.name ||
-              undefined;
-            const lang = parseCatalogueLanguageHints({
-              name: label,
-              group: p.m3u_account?.name,
-            }).language;
+            const categoryName = p.category?.name;
+            const basicName = p.custom_properties?.basic_data?.name;
+            // Language lives on category / XC title — never m3u account ("Strong 8K").
+            const hints = parseCatalogueLanguageHints({
+              name: categoryName ?? basicName,
+              group: basicName ?? movie.name,
+            });
+            const qualityLabel = p.quality_info?.quality ?? p.quality_info?.resolution ?? undefined;
+            const fromQi = parseQualityHints(qualityLabel);
+            const fromLabel = parseQualityHints([categoryName, basicName, movie.name].filter(Boolean).join(" "));
+            const resolutionHeight =
+              fromQi.height ?? hints.qualityHeight ?? fromLabel.height ?? titleHints.qualityHeight;
+            const hdr = Boolean(fromQi.hdr ?? hints.hdr ?? fromLabel.hdr ?? titleHints.hdr);
             return {
               streamId: p.stream_id ?? undefined,
               m3uAccountId: p.m3u_account?.id,
-              label,
-              catalogueLanguage: lang,
+              label: categoryName ?? basicName ?? qualityLabel,
+              catalogueLanguage: hints.language,
+              qualityLabel,
+              resolutionHeight,
+              hdr: hdr || undefined,
             };
           }),
         );
@@ -809,12 +818,14 @@ export class DispatcharrProvider implements VodProvider, LiveTvProvider, Acquisi
       if (infoParsed.success) {
         const info = infoParsed.data;
         if (candidates.length === 0 && info.stream_id) {
-          const lang = parseCatalogueLanguageHints({ name: info.name }).language;
+          const hints = parseCatalogueLanguageHints({ name: info.name ?? movie.name });
           candidates = [
             {
               streamId: info.stream_id,
               label: info.name,
-              catalogueLanguage: lang,
+              catalogueLanguage: hints.language,
+              resolutionHeight: hints.qualityHeight,
+              hdr: hints.hdr,
             },
           ];
         }
@@ -834,29 +845,11 @@ export class DispatcharrProvider implements VodProvider, LiveTvProvider, Acquisi
     );
   }
 
-  /** Rank stream candidates by catalogue language hints in label/account name. */
+  /** Rank streams: preferred language (from category), then quality (4K > unknown). */
   private rankStreamCandidates(
     candidates: DispatcharrStreamCandidate[],
   ): DispatcharrStreamCandidate[] {
-    if (candidates.length <= 1) {
-      return candidates.map((c) => ({
-        ...c,
-        catalogueLanguage:
-          c.catalogueLanguage ?? parseCatalogueLanguageHints({ name: c.label }).language,
-      }));
-    }
-    const ranked = candidates.map((c, index) => {
-      const lang =
-        c.catalogueLanguage ??
-        parseCatalogueLanguageHints({ name: c.label }).language;
-      const { score } = scoreLanguagePreference({
-        preferredLanguages: this.preferredLanguages,
-        catalogueLanguage: lang,
-      });
-      return { c: { ...c, catalogueLanguage: lang }, score, index };
-    });
-    ranked.sort((a, b) => b.score - a.score || a.index - b.index);
-    return ranked.map((r) => r.c);
+    return rankDispatcharrStreamCandidates(candidates, this.preferredLanguages);
   }
 
   /** Expose for tests / indexers */

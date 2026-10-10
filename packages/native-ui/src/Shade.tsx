@@ -23,12 +23,12 @@ export function Shade({
           : kind === "details-bottom"
             ? "linear-gradient(180deg, transparent 35%, rgba(24,24,24,0.9) 72%, #181818 100%)"
             : "linear-gradient(180deg, rgba(0,0,0,0.7) 10%, transparent)";
-    return <View style={[styles.fill, style, webGradient(image)]} pointerEvents="none" />;
+    return <View style={[styles.fill, style, webGradient(image)]} />;
   }
 
   if (kind === "billboard-vertical") {
     return (
-      <View style={[styles.fill, style]} pointerEvents="none">
+      <View style={[styles.fill, style]}>
         <View style={[styles.fill, { backgroundColor: "rgba(0,0,0,0.28)" }]} />
         <View style={styles.bottomFade} />
         <View style={styles.bottomSolid} />
@@ -38,7 +38,7 @@ export function Shade({
 
   if (kind === "billboard-left") {
     return (
-      <View style={[styles.fill, style]} pointerEvents="none">
+      <View style={[styles.fill, style]}>
         <View style={styles.leftHeavy} />
         <View style={styles.leftSoft} />
       </View>
@@ -47,7 +47,7 @@ export function Shade({
 
   if (kind === "details-bottom") {
     return (
-      <View style={[styles.fill, style]} pointerEvents="none">
+      <View style={[styles.fill, style]}>
         <View style={styles.detailsMid} />
         <View style={styles.detailsBottom} />
       </View>
@@ -56,14 +56,14 @@ export function Shade({
 
   // header-top
   return (
-    <View style={[styles.fill, style]} pointerEvents="none">
+    <View style={[styles.fill, style]}>
       <View style={styles.headerBand} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  fill: { ...StyleSheet.absoluteFill },
+  fill: { ...StyleSheet.absoluteFill, pointerEvents: "none" },
   bottomFade: {
     position: "absolute",
     left: 0,

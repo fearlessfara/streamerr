@@ -17,6 +17,27 @@ export function NfBackIcon({ size = 28, color = "#fff" }: IconProps) {
   );
 }
 
+/** AirPlay — rectangle screen with upward triangle (SF Symbol–like). */
+export function NfAirPlayIcon({ size = 26, color = "#fff" }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M5 4.5h14A1.5 1.5 0 0 1 20.5 6v8A1.5 1.5 0 0 1 19 15.5h-3.2"
+        stroke={color}
+        strokeWidth={1.8}
+        strokeLinecap="round"
+      />
+      <Path
+        d="M8.2 15.5H5A1.5 1.5 0 0 1 3.5 14V6A1.5 1.5 0 0 1 5 4.5"
+        stroke={color}
+        strokeWidth={1.8}
+        strokeLinecap="round"
+      />
+      <Path d="M12 14.2l5.2 6.3H6.8L12 14.2z" fill={color} />
+    </Svg>
+  );
+}
+
 /** Netflix top-right report flag. */
 export function NfFlagIcon({ size = 26, color = "#fff" }: IconProps) {
   return (

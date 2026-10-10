@@ -89,6 +89,25 @@ export const DispatcharrMovieProviderSchema = z
       })
       .passthrough()
       .optional(),
+    /** Language / pack bucket — primary signal for stream ranking (e.g. "EN - DRAMA"). */
+    category: z
+      .object({
+        id: z.number().optional(),
+        name: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    custom_properties: z
+      .object({
+        basic_data: z
+          .object({
+            name: z.string().optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
     /** Nested movie payload often carries duration when the list endpoint does not. */
     movie: z
       .object({

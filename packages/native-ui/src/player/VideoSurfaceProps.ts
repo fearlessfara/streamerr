@@ -11,6 +11,12 @@ export type VideoTransport = {
   requestFullscreen: () => Promise<void> | void;
   exitFullscreen: () => Promise<void> | void;
   isFullscreen: () => boolean;
+  /** Safari / WebKit — show the system AirPlay route picker when available. */
+  showAirPlayPicker?: () => void;
+  isAirPlayAvailable?: () => boolean;
+  isAirPlayActive?: () => boolean;
+  /** Subscribe to AirPlay availability / active-route changes (web only). */
+  onAirPlayChange?: (listener: () => void) => () => void;
 };
 
 /** Props every platform video surface must accept (native Video / web MSE). */
